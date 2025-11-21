@@ -2,14 +2,31 @@ import express from "express";
 import cors from "cors";
 import pkg from "pg";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const { Pool } = pkg;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
+const port = process.env.PORT || 4000;
+
+// Security: Disable X-Powered-By header
+app.disable("x-powered-by");
+
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from the dist directory in production
+if (process.env.NODE_ENV === "production") {
+	app.use(express.static(path.join(__dirname, "../dist"), {
+		maxAge: "1d", // Cache static assets for 1 day
+		etag: true,
+	}));
+}
 
 const pool = new Pool({
 	host: process.env.DB_HOST,
@@ -29,7 +46,7 @@ function asRange(req) {
 	return { start, end };
 }
 
-app.get("/total-users", async (req, res) => {
+app.get("/api/total-users", async (req, res) => {
 	try {
 		const client = await pool.connect();
 		try {
@@ -45,7 +62,7 @@ app.get("/total-users", async (req, res) => {
 	}
 });
 
-app.get("/totals", async (req, res) => {
+app.get("/api/totals", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 
@@ -104,7 +121,7 @@ app.get("/totals", async (req, res) => {
 	}
 });
 
-app.get("/google", async (req, res) => {
+app.get("/api/google", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 		const client = await pool.connect();
@@ -190,7 +207,7 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 	}
 });
 
-app.get("/youtube", async (req, res) => {
+app.get("/api/youtube", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 		const client = await pool.connect();
@@ -283,7 +300,7 @@ ORDER BY c.user_converted DESC;`,
 	}
 });
 
-app.get("/linkedin", async (req, res) => {
+app.get("/api/linkedin", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 		const client = await pool.connect();
@@ -391,7 +408,7 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 	}
 });
 
-app.get("/brevo", async (req, res) => {
+app.get("/api/brevo", async (req, res) => {
 	try {
 		const client = await pool.connect();
 		try {
@@ -488,7 +505,33 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`
 	}
 });
 
-const port = process.env.PORT || 4000;
+// Serve the React app for all other routes (SPA routing) in production
+if (process.env.NODE_ENV === "production") {
+	app.get("*", (req, res, next) => {
+		// Only serve index.html for routes that don't look like files
+		// This prevents serving the SPA for missing assets or API routes
+		const requestPath = req.path;
+		
+		// Skip if it's an API route (shouldn't happen, but extra safety)
+		if (requestPath.startsWith("/api/")) {
+			return next();
+		}
+		
+		// Skip if it looks like a file with extension (e.g., .json, .xml, .txt)
+		// Static middleware already handles .js, .css, .png, etc.
+		if (requestPath.includes(".") && !requestPath.endsWith("/")) {
+			return res.status(404).json({ error: "Not found" });
+		}
+		
+		// Serve the React app
+		res.sendFile(path.join(__dirname, "../dist/index.html"), (err) => {
+			if (err) {
+				res.status(500).json({ error: "Failed to load application" });
+			}
+		});
+	});
+}
+
 app.listen(port, () => {
 	console.log(`API server on http://localhost:${port}`);
 });
