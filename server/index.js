@@ -506,26 +506,26 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`
 });
 
 // Serve the React app for all other routes (SPA routing) in production
+// This catch-all route must be last - it handles client-side routing
 if (process.env.NODE_ENV === "production") {
-	app.get("*", (req, res, next) => {
-		// Only serve index.html for routes that don't look like files
-		// This prevents serving the SPA for missing assets or API routes
-		const requestPath = req.path;
-		
-		// Skip if it's an API route (shouldn't happen, but extra safety)
-		if (requestPath.startsWith("/api/")) {
+	// Use app.use with a path check for better Express 5 compatibility
+	app.use((req, res, next) => {
+		// Skip API routes (should already be handled, but safety check)
+		if (req.path.startsWith("/api/")) {
 			return next();
 		}
 		
-		// Skip if it looks like a file with extension (e.g., .json, .xml, .txt)
-		// Static middleware already handles .js, .css, .png, etc.
-		if (requestPath.includes(".") && !requestPath.endsWith("/")) {
+		// Skip static file requests (files with extensions)
+		// Static middleware handles existing files, but we want to return 404
+		// for missing static assets instead of serving index.html
+		if (req.path.match(/\.[a-zA-Z0-9]+$/)) {
 			return res.status(404).json({ error: "Not found" });
 		}
 		
-		// Serve the React app
+		// Serve the React app for all other routes (enables client-side routing)
 		res.sendFile(path.join(__dirname, "../dist/index.html"), (err) => {
 			if (err) {
+				console.error("Failed to serve index.html:", err);
 				res.status(500).json({ error: "Failed to load application" });
 			}
 		});

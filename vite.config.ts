@@ -12,4 +12,6 @@ export default defineConfig({
       },
     },
   },
+  // Ignore NODE_ENV from .env files - Vite sets it automatically based on the command
+  envPrefix: ['VITE_'], // Only load env vars prefixed with VITE_ from .env files
 })

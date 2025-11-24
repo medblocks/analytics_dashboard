@@ -12,13 +12,12 @@ RUN npm ci
 COPY . .
 
 # Build the frontend
-RUN npm run build
+# NODE_ENV is set explicitly here to override any .env file value
+# Vite automatically sets NODE_ENV=production during build, but we set it explicitly to avoid warnings
+RUN NODE_ENV=production npm run build
 
 # Expose port
 EXPOSE 4000
-
-# Set production environment
-ENV NODE_ENV=production
 
 # Start the server
 CMD ["node", "server/index.js"]
