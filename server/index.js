@@ -20,9 +20,18 @@ app.disable("x-powered-by");
 app.use(cors());
 app.use(express.json());
 
+// Request logging middleware
+app.use((req, res, next) => {
+	console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+	next();
+});
+
 // Serve static files from the dist directory in production
 if (process.env.NODE_ENV === "production") {
-	app.use(express.static(path.join(__dirname, "../dist"), {
+	const distPath = path.join(__dirname, "../dist");
+	console.log(`Serving static files from: ${distPath}`);
+	
+	app.use(express.static(distPath, {
 		maxAge: "1d", // Cache static assets for 1 day
 		etag: true,
 	}));
@@ -34,6 +43,14 @@ const pool = new Pool({
 	password: process.env.DB_PASSWORD,
 	database: process.env.DB_NAME,
 	port: parseInt(process.env.DB_PORT),
+	// Add connection pool error handling
+	connectionTimeoutMillis: 5000,
+	idleTimeoutMillis: 30000,
+});
+
+// Handle pool errors to prevent app crashes
+pool.on('error', (err) => {
+	console.error('Unexpected database pool error:', err);
 });
 
 function asRange(req) {
@@ -45,6 +62,36 @@ function asRange(req) {
   console.log("Got the date ranger", start, end);
 	return { start, end };
 }
+
+// Health check endpoint - must be before other routes
+app.get("/health", (req, res) => {
+	res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// API health check with database connection test
+app.get("/api/health", async (req, res) => {
+	try {
+		const client = await pool.connect();
+		try {
+			await client.query('SELECT 1');
+			res.status(200).json({ 
+				status: "ok", 
+				database: "connected",
+				timestamp: new Date().toISOString() 
+			});
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Health check failed:", e);
+		res.status(503).json({ 
+			status: "error", 
+			database: "disconnected",
+			error: e.message,
+			timestamp: new Date().toISOString() 
+		});
+	}
+});
 
 app.get("/api/total-users", async (req, res) => {
 	try {
@@ -58,7 +105,8 @@ app.get("/api/total-users", async (req, res) => {
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/total-users:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -117,7 +165,8 @@ app.get("/api/totals", async (req, res) => {
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/totals:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -203,7 +252,8 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/google:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -296,7 +346,8 @@ ORDER BY c.user_converted DESC;`,
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/youtube:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -404,7 +455,8 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/linkedin:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -501,7 +553,8 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`
 			client.release();
 		}
 	} catch (e) {
-		res.status(400).json({ error: e.message || "bad request" });
+		console.error("Error in /api/brevo:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
 	}
 });
 
@@ -534,4 +587,7 @@ if (process.env.NODE_ENV === "production") {
 
 app.listen(port, '0.0.0.0', () => {
 	console.log(`API server running on http://0.0.0.0:${port}`);
+	console.log(`Environment: ${process.env.NODE_ENV}`);
+	console.log(`Database host: ${process.env.DB_HOST}`);
+	console.log(`Health check available at: http://0.0.0.0:${port}/health`);
 });
