@@ -43,9 +43,11 @@ const pool = new Pool({
 	password: process.env.DB_PASSWORD,
 	database: process.env.DB_NAME,
 	port: parseInt(process.env.DB_PORT),
-	// Add connection pool error handling
-	connectionTimeoutMillis: 5000,
-	idleTimeoutMillis: 30000,
+	// Connection pool configuration
+	max: 20, // Maximum number of clients in the pool
+	connectionTimeoutMillis: 30000, // Wait up to 30 seconds for a connection
+	idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
+	allowExitOnIdle: false, // Keep pool alive even when idle
 });
 
 // Handle pool errors to prevent app crashes
