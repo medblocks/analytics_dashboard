@@ -14,6 +14,7 @@ export interface Row {
   post: string
   redirect_count: number
   user_converted: number
+  queries?: string[]
 }
 
 export interface CalculatedTotals {

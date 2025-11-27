@@ -519,3 +519,35 @@ td {
   margin-bottom: 32px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
 }
+
+/* Query chips styling */
+.queries-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 400px;
+}
+
+.query-chip {
+  display: inline-block;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  transition: all 0.2s ease;
+}
+
+.query-chip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.no-queries {
+  color: #a0aec0;
+  font-style: italic;
+  font-size: 13px;
+}

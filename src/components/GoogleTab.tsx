@@ -1,6 +1,6 @@
 import type { Row } from '../shared/types'
 import { StatsCard } from '../shared/components/StatsCard'
-import { PerformanceTable } from '../shared/components/PerformanceTable'
+import { GooglePerformanceTable } from '../shared/components/GooglePerformanceTable'
 import { ErrorCard } from '../shared/components/ErrorCard'
 import { usePerformanceMetrics } from '../shared/hooks/usePerformanceMetrics'
 import { formatPercentage } from '../shared/utils/formatters'
@@ -34,7 +34,7 @@ export function GoogleTab({ start, end, rows, loading, error }: GoogleTabProps) 
           />
         </div>
         
-        <PerformanceTable rows={rows} totals={totals} loading={loading} colName="URL Path" />
+        <GooglePerformanceTable rows={rows} totals={totals} loading={loading} />
       </div>
     </>
   )

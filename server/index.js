@@ -272,14 +272,42 @@ conversions_by_post AS (
     SUM(converted) AS user_converted
   FROM session_conversions
   GROUP BY post
+),
+queries_by_path AS (
+  SELECT
+    regexp_replace(page, '^https?://[^/]+', '') AS url_path,
+    query,
+    MIN(position) AS best_position
+  FROM search_console_fresh
+  WHERE fetch_date >= $1::date
+    AND fetch_date <= $2::date
+  GROUP BY regexp_replace(page, '^https?://[^/]+', ''), query
+),
+top_queries_by_path AS (
+  SELECT
+    url_path,
+    ARRAY_AGG(query ORDER BY best_position ASC) AS queries
+  FROM (
+    SELECT
+      url_path,
+      query,
+      best_position,
+      ROW_NUMBER() OVER (PARTITION BY url_path ORDER BY best_position ASC) AS rn
+    FROM queries_by_path
+  ) ranked
+  WHERE rn <= 5
+  GROUP BY url_path
 )
 SELECT
   r.post,
   r.redirect_count::int,
-  COALESCE(c.user_converted, 0)::int AS user_converted
+  COALESCE(c.user_converted, 0)::int AS user_converted,
+  COALESCE(array_to_json(q.queries), '[]'::json) AS queries
 FROM redirects_by_post r
 LEFT JOIN conversions_by_post c
   ON c.post = r.post
+LEFT JOIN top_queries_by_path q
+  ON q.url_path = r.post
 ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 				[start, end]
 			);
