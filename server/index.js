@@ -192,38 +192,41 @@ post_sessions AS (
   SELECT DISTINCT post, session_id
   FROM base
 ),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
 session_conversions AS (
-  SELECT
-    ps.post,
-    ps.session_id,
-    CASE WHEN EXISTS (
-      SELECT 1
-      FROM LATERAL (
-        SELECT
-          u2.event_id AS website_event_id,
-          u2.created_at AS event_created_at
-        FROM umami_website_event u2
-        WHERE u2.session_id = ps.session_id
-          AND u2.event_type = 2
-        ORDER BY u2.created_at ASC
-        LIMIT 1
-      ) first_evt
-      JOIN LATERAL (
-        SELECT
-          ued.string_value,
-          ued.created_at AS event_data_created_at
-        FROM umami_event_data ued
-        WHERE ued.website_event_id = first_evt.website_event_id
-          AND ued.data_key = 'user_id'
-        ORDER BY ued.created_at ASC
-        LIMIT 1
-      ) user_data ON TRUE
-      JOIN directus_user du
-        ON du.id = user_data.string_value
-       AND du.date_created BETWEEN (user_data.event_data_created_at - INTERVAL '2 minutes')
-                               AND (user_data.event_data_created_at + INTERVAL '2 minutes')
-    ) THEN 1 ELSE 0 END AS converted
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
   FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
 ),
 redirects_by_post AS (
   SELECT
@@ -266,80 +269,81 @@ app.get("/api/youtube", async (req, res) => {
 		try {
 			const { rows } = await client.query(
 				`WITH base AS (
-SELECT
-btrim(regexp_replace(y.video_title, '[[:space:]]+', ' ', 'g')) AS post,
-uwe.session_id,
-uwe.event_id AS uwe_id
-FROM umami_website_event uwe
-JOIN directus_content dc
-ON POSITION(
-dc.full_link IN ('https://medblocks.com' || uwe.url_path || '?' || uwe.url_query)
-) = 1
-JOIN youtube y
-ON y.video_id = dc.content_id
-AND y.fetch_date = '2025-09-08'
-WHERE uwe.created_at > $1::timestamptz
-AND uwe.created_at < $2::timestamptz
-AND uwe.url_query ILIKE '%utm_source=youtube%'
+  SELECT
+    btrim(regexp_replace(y.video_title, '[[:space:]]+', ' ', 'g')) AS post,
+    uwe.session_id,
+    uwe.event_id AS uwe_id
+  FROM umami_website_event uwe
+  JOIN directus_content dc
+    ON POSITION(dc.full_link IN ('https://medblocks.com' || uwe.url_path || '?' || uwe.url_query)) = 1
+  JOIN youtube y
+    ON y.video_id = dc.content_id
+    AND y.fetch_date = '2025-09-08'
+  WHERE uwe.created_at > $1::timestamptz
+    AND uwe.created_at < $2::timestamptz
+    AND uwe.url_query ILIKE '%utm_source=youtube%'
 ),
 post_sessions AS (
-SELECT DISTINCT post, session_id
-FROM base
+  SELECT DISTINCT post, session_id
+  FROM base
+),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
 ),
 session_conversions AS (
-SELECT
-ps.post,
-ps.session_id,
-CASE WHEN EXISTS (
-SELECT 1
-FROM LATERAL (
-SELECT
-u2.event_id AS website_event_id,
-u2.created_at AS event_created_at
-FROM umami_website_event u2
-WHERE u2.session_id = ps.session_id
-AND u2.event_type = 2
-ORDER BY u2.created_at ASC
-LIMIT 1
-) first_evt
-JOIN LATERAL (
-SELECT
-ued.string_value,
-ued.created_at AS event_data_created_at
-FROM umami_event_data ued
-WHERE ued.website_event_id = first_evt.website_event_id
-AND ued.data_key = 'user_id'
-ORDER BY ued.created_at ASC
-LIMIT 1
-) user_data ON TRUE
-JOIN directus_user du
-ON du.id = user_data.string_value
-AND du.date_created BETWEEN (user_data.event_data_created_at - INTERVAL '2 minutes')
-AND (user_data.event_data_created_at + INTERVAL '2 minutes')
-) THEN 1 ELSE 0 END AS converted
-FROM post_sessions ps
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
+  FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
 ),
 redirects_by_post AS (
-SELECT
-post,
-COUNT(*) AS redirect_count
-FROM base
-GROUP BY post
+  SELECT
+    post,
+    COUNT(*) AS redirect_count
+  FROM base
+  GROUP BY post
 ),
 conversions_by_post AS (
-SELECT
-post,
-SUM(converted) AS user_converted
-FROM session_conversions
-GROUP BY post
+  SELECT
+    post,
+    SUM(converted) AS user_converted
+  FROM session_conversions
+  GROUP BY post
 )
 SELECT
-r.post,
-r.redirect_count::int,
-COALESCE(c.user_converted, 0)::int AS user_converted
+  r.post,
+  r.redirect_count::int,
+  COALESCE(c.user_converted, 0)::int AS user_converted
 FROM redirects_by_post r
 LEFT JOIN conversions_by_post c
-ON c.post = r.post
+  ON c.post = r.post
 ORDER BY c.user_converted DESC;`,
 				[start, end]
 			);
@@ -394,38 +398,41 @@ post_sessions AS (
   SELECT DISTINCT post, session_id
   FROM base
 ),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
 session_conversions AS (
-  SELECT
-    ps.post,
-    ps.session_id,
-    CASE WHEN EXISTS (
-      SELECT 1
-      FROM LATERAL (
-        SELECT
-          u2.event_id  AS website_event_id,
-          u2.created_at AS event_created_at
-        FROM umami_website_event u2
-        WHERE u2.session_id = ps.session_id
-          AND u2.event_type = 2
-        ORDER BY u2.created_at ASC
-        LIMIT 1
-      ) first_evt
-      JOIN LATERAL (
-        SELECT
-          ued.string_value,
-          ued.created_at AS event_data_created_at
-        FROM umami_event_data ued
-        WHERE ued.website_event_id = first_evt.website_event_id
-          AND ued.data_key = 'user_id'
-        ORDER BY ued.created_at ASC
-        LIMIT 1
-      ) user_data ON TRUE
-      JOIN directus_user du
-        ON du.id = user_data.string_value
-       AND du.date_created BETWEEN (user_data.event_data_created_at - INTERVAL '2 minutes')
-                                AND (user_data.event_data_created_at + INTERVAL '2 minutes')
-    ) THEN 1 ELSE 0 END AS converted
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
   FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
 ),
 redirects_by_post AS (
   SELECT
@@ -494,38 +501,41 @@ post_sessions AS (
   SELECT DISTINCT post, session_id
   FROM base
 ),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
 session_conversions AS (
-  SELECT
-    ps.post,
-    ps.session_id,
-    CASE WHEN EXISTS (
-      SELECT 1
-      FROM LATERAL (
-        SELECT
-          u2.event_id  AS website_event_id,
-          u2.created_at AS event_created_at
-        FROM umami_website_event u2
-        WHERE u2.session_id = ps.session_id
-          AND u2.event_type = 2
-        ORDER BY u2.created_at ASC
-        LIMIT 1
-      ) first_evt
-      JOIN LATERAL (
-        SELECT
-          ued.string_value,
-          ued.created_at AS event_data_created_at
-        FROM umami_event_data ued
-        WHERE ued.website_event_id = first_evt.website_event_id
-          AND ued.data_key = 'user_id'
-        ORDER BY ued.created_at ASC
-        LIMIT 1
-      ) user_data ON TRUE
-      JOIN directus_user du
-        ON du.id = user_data.string_value
-       AND du.date_created BETWEEN (user_data.event_data_created_at - INTERVAL '2 minutes')
-                                AND (user_data.event_data_created_at + INTERVAL '2 minutes')
-    ) THEN 1 ELSE 0 END AS converted
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
   FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
 ),
 redirects_by_post AS (
   SELECT
