@@ -37,6 +37,17 @@ if (process.env.NODE_ENV === "production") {
 	}));
 }
 
+// Validate required environment variables
+const requiredEnvVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'DB_PORT'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+	console.error('❌ Missing required environment variables:', missingEnvVars.join(', '));
+	console.error('Please create a .env file with the following variables:');
+	console.error('DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, DB_PORT');
+	process.exit(1);
+}
+
 const pool = new Pool({
 	host: process.env.DB_HOST,
 	user: process.env.DB_USER,
@@ -54,6 +65,26 @@ const pool = new Pool({
 pool.on('error', (err) => {
 	console.error('Unexpected database pool error:', err);
 });
+
+// Test database connection on startup
+async function testDatabaseConnection() {
+	try {
+		const client = await pool.connect();
+		await client.query('SELECT 1');
+		client.release();
+		console.log('✅ Database connection successful');
+		return true;
+	} catch (err) {
+		console.error('❌ Database connection failed:', err.message);
+		console.error('Database config:', {
+			host: process.env.DB_HOST,
+			user: process.env.DB_USER,
+			database: process.env.DB_NAME,
+			port: process.env.DB_PORT,
+		});
+		return false;
+	}
+}
 
 function asRange(req) {
 	const start = req.query.start;
@@ -597,9 +628,12 @@ if (process.env.NODE_ENV === "production") {
 	});
 }
 
-app.listen(port, '0.0.0.0', () => {
-	console.log(`API server running on http://0.0.0.0:${port}`);
-	console.log(`Environment: ${process.env.NODE_ENV}`);
-	console.log(`Database host: ${process.env.DB_HOST}`);
-	console.log(`Health check available at: http://0.0.0.0:${port}/health`);
+app.listen(port, '0.0.0.0', async () => {
+	console.log(`🚀 API server running on http://0.0.0.0:${port}`);
+	console.log(`📦 Environment: ${process.env.NODE_ENV}`);
+	console.log(`🗄️  Database host: ${process.env.DB_HOST}`);
+	console.log(`❤️  Health check available at: http://0.0.0.0:${port}/health`);
+	console.log('');
+	console.log('Testing database connection...');
+	await testDatabaseConnection();
 });
