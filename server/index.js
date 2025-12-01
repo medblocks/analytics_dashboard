@@ -4,6 +4,7 @@ import pkg from "pg";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
 
 dotenv.config();
 
@@ -92,8 +93,49 @@ function asRange(req) {
 	if (!start || !end) {
 		throw new Error("Missing start or end");
 	}
-  console.log("Got the date ranger", start, end);
+  console.log("Got the date range", start, end);
 	return { start, end };
+}
+
+// Helper function to calculate previous week period
+function getPreviousPeriod(start, end) {
+	const startDate = new Date(start);
+	const endDate = new Date(end);
+	const durationMs = endDate - startDate;
+	
+	// Previous period ends exactly when current period starts
+	// and has the same duration going backwards
+	const prevEnd = startDate.toISOString();
+	const prevStart = new Date(startDate.getTime() - durationMs).toISOString();
+	
+	console.log(`Current period: ${start} to ${end}`);
+	console.log(`Previous period: ${prevStart} to ${prevEnd}`);
+	
+	return {
+		prevStart,
+		prevEnd
+	};
+}
+
+// Helper function to read keywords from CSV file
+function getKeywordsFromCSV() {
+	try {
+		const csvPath = path.join(__dirname, "../openehr_all-keywords_us_2025-12-01.csv");
+		const csvContent = fs.readFileSync(csvPath, "utf-8");
+		const lines = csvContent.split("\n");
+		
+		// Skip header row and extract first column (keywords)
+		const keywords = lines
+			.slice(1) // Skip header
+			.map(line => line.split(",")[0]?.trim()) // Get first column
+			.filter(keyword => keyword && keyword.length > 0); // Remove empty entries
+		
+		console.log(`Loaded ${keywords.length} keywords from CSV`);
+		return keywords;
+	} catch (error) {
+		console.error("Error reading CSV file:", error);
+		return [];
+	}
 }
 
 // Health check endpoint - must be before other routes
@@ -143,9 +185,58 @@ app.get("/api/total-users", async (req, res) => {
 	}
 });
 
+app.get("/api/user-growth", async (req, res) => {
+	try {
+		const client = await pool.connect();
+		try {
+			const { rows } = await client.query(
+				`WITH date_range AS (
+          SELECT generate_series(
+            date_trunc('day', now() - interval '30 days'),
+            date_trunc('day', now()),
+            '1 day'::interval
+          ) as date
+        ),
+        daily_counts AS (
+          SELECT 
+            date_trunc('day', date_created) as date,
+            count(*)::int as daily_count
+          FROM directus_user 
+          WHERE date_created > now() - interval '30 days'
+          GROUP BY 1
+        ),
+        all_dates_with_counts AS (
+          SELECT 
+            dr.date,
+            COALESCE(dc.daily_count, 0)::int as daily_count,
+            (SELECT COUNT(*)::int 
+             FROM directus_user 
+             WHERE date_trunc('day', date_created) <= dr.date) as cumulative_count
+          FROM date_range dr
+          LEFT JOIN daily_counts dc ON dr.date = dc.date
+        )
+        SELECT 
+          date,
+          daily_count,
+          cumulative_count
+        FROM all_dates_with_counts
+        ORDER BY date ASC`
+			);
+			console.log('User growth data sample:', rows.slice(0, 3), '...', rows.slice(-2));
+			res.json(rows);
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/user-growth:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 app.get("/api/totals", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
+		const { prevStart, prevEnd } = getPreviousPeriod(start, end);
 
 		const client = await pool.connect();
 		try {
@@ -154,7 +245,12 @@ app.get("/api/totals", async (req, res) => {
 				{ rows: liRows },
 				{ rows: ytRows },
 				{ rows: gRows },
+				{ rows: prevURows },
+				{ rows: prevLiRows },
+				{ rows: prevYtRows },
+				{ rows: prevGRows },
 			] = await Promise.all([
+				// Current period
 				client.query(
 					`select count(*)::int as user_no from directus_user WHERE date_created > $1::timestamptz and date_created < $2::timestamptz`,
 					[start, end]
@@ -181,19 +277,65 @@ app.get("/api/totals", async (req, res) => {
            AND referrer_domain ILIKE '%google%'`,
 					[start, end]
 				),
+				// Previous period
+				client.query(
+					`select count(*)::int as user_no from directus_user WHERE date_created > $1::timestamptz and date_created < $2::timestamptz`,
+					[prevStart, prevEnd]
+				),
+				client.query(
+					`SELECT count(*)::int as linkedin_views
+           FROM umami_website_event uwe
+           WHERE created_at > $1::timestamptz and created_at < $2::timestamptz
+           AND url_query ILIKE '%utm_source=linkedin%'
+           AND url_query NOT ILIKE '%utm_medium=bio&utm_source=linkedin%'`,
+					[prevStart, prevEnd]
+				),
+				client.query(
+					`SELECT count(*)::int as yt_views
+           FROM umami_website_event uwe
+           WHERE created_at > $1::timestamptz and created_at < $2::timestamptz
+           AND url_query ILIKE '%utm_source=youtube%'`,
+					[prevStart, prevEnd]
+				),
+				client.query(
+					`SELECT count(*)::int as google_views
+           FROM umami_website_event uwe
+           WHERE created_at > $1::timestamptz and created_at < $2::timestamptz
+           AND referrer_domain ILIKE '%google%'`,
+					[prevStart, prevEnd]
+				),
 			]);
 
 			const totalUsers = uRows[0]?.user_no ?? 0;
 			const linkedinViews = liRows[0]?.linkedin_views ?? 0;
 			const youtubeViews = ytRows[0]?.yt_views ?? 0;
 			const googleViews = gRows[0]?.google_views ?? 0;
-
 			const other = Math.max(
 				0,
 				totalUsers - (linkedinViews + youtubeViews + googleViews)
 			);
 
-			res.json({ totalUsers, linkedinViews, youtubeViews, googleViews, other });
+			const prevTotalUsers = prevURows[0]?.user_no ?? 0;
+			const prevLinkedinViews = prevLiRows[0]?.linkedin_views ?? 0;
+			const prevYoutubeViews = prevYtRows[0]?.yt_views ?? 0;
+			const prevGoogleViews = prevGRows[0]?.google_views ?? 0;
+			const prevOther = Math.max(
+				0,
+				prevTotalUsers - (prevLinkedinViews + prevYoutubeViews + prevGoogleViews)
+			);
+
+			res.json({ 
+				totalUsers, 
+				linkedinViews, 
+				youtubeViews, 
+				googleViews, 
+				other,
+				prevTotalUsers,
+				prevLinkedinViews,
+				prevYoutubeViews,
+				prevGoogleViews,
+				prevOther
+			});
 		} finally {
 			client.release();
 		}
@@ -206,9 +348,12 @@ app.get("/api/totals", async (req, res) => {
 app.get("/api/google", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
+		const { prevStart, prevEnd } = getPreviousPeriod(start, end);
 		const client = await pool.connect();
 		try {
-			const { rows } = await client.query(
+			const [{ rows }, { rows: prevRows }] = await Promise.all([
+				// Current period
+				client.query(
 				`WITH base AS (
   SELECT
     uwe.url_path AS post,
@@ -310,8 +455,113 @@ LEFT JOIN top_queries_by_path q
   ON q.url_path = r.post
 ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 				[start, end]
-			);
-			res.json(rows);
+			),
+			// Previous period
+			client.query(
+				`WITH base AS (
+  SELECT
+    uwe.url_path AS post,
+    uwe.session_id,
+    uwe.event_id AS uwe_id
+  FROM umami_website_event uwe
+  WHERE uwe.created_at > $1::timestamptz
+    AND uwe.created_at < $2::timestamptz
+    AND uwe.referrer_domain ILIKE '%google%'
+),
+post_sessions AS (
+  SELECT DISTINCT post, session_id
+  FROM base
+),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
+session_conversions AS (
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
+  FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
+),
+redirects_by_post AS (
+  SELECT
+    post,
+    COUNT(*) AS redirect_count
+  FROM base
+  GROUP BY post
+),
+conversions_by_post AS (
+  SELECT
+    post,
+    SUM(converted) AS user_converted
+  FROM session_conversions
+  GROUP BY post
+),
+queries_by_path AS (
+  SELECT
+    regexp_replace(page, '^https?://[^/]+', '') AS url_path,
+    query,
+    MIN(position) AS best_position
+  FROM search_console_fresh
+  WHERE fetch_date >= $1::date
+    AND fetch_date <= $2::date
+  GROUP BY regexp_replace(page, '^https?://[^/]+', ''), query
+),
+top_queries_by_path AS (
+  SELECT
+    url_path,
+    ARRAY_AGG(query ORDER BY best_position ASC) AS queries
+  FROM (
+    SELECT
+      url_path,
+      query,
+      best_position,
+      ROW_NUMBER() OVER (PARTITION BY url_path ORDER BY best_position ASC) AS rn
+    FROM queries_by_path
+  ) ranked
+  WHERE rn <= 5
+  GROUP BY url_path
+)
+SELECT
+  r.post,
+  r.redirect_count::int,
+  COALESCE(c.user_converted, 0)::int AS user_converted,
+  COALESCE(array_to_json(q.queries), '[]'::json) AS queries
+FROM redirects_by_post r
+LEFT JOIN conversions_by_post c
+  ON c.post = r.post
+LEFT JOIN top_queries_by_path q
+  ON q.url_path = r.post
+ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
+				[prevStart, prevEnd]
+			)
+		]);
+			res.json({ rows, prevRows });
 		} finally {
 			client.release();
 		}
@@ -321,12 +571,135 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 	}
 });
 
-app.get("/api/youtube", async (req, res) => {
+app.get("/api/search-queries", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
+		
+		// Get keywords from CSV file
+		const keywords = getKeywordsFromCSV();
+		if (keywords.length === 0) {
+			return res.status(500).json({ error: "No keywords found in CSV file" });
+		}
+		
 		const client = await pool.connect();
 		try {
 			const { rows } = await client.query(
+				`WITH queries_with_paths AS (
+  SELECT
+    query,
+    regexp_replace(page, '^https?://[^/]+', '') AS url_path
+  FROM search_console_fresh
+  WHERE fetch_date >= $1::date
+    AND fetch_date <= $2::date
+    AND query = ANY($3)
+),
+base AS (
+  SELECT
+    qwp.query,
+    qwp.url_path,
+    uwe.session_id,
+    uwe.event_id AS uwe_id
+  FROM queries_with_paths qwp
+  JOIN umami_website_event uwe
+    ON uwe.url_path = qwp.url_path
+  WHERE uwe.created_at > $1::timestamptz
+    AND uwe.created_at < $2::timestamptz
+    AND uwe.referrer_domain ILIKE '%google%'
+),
+query_sessions AS (
+  SELECT DISTINCT query, session_id
+  FROM base
+),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
+session_conversions AS (
+  SELECT qs.query, qs.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
+  FROM query_sessions qs
+  LEFT JOIN converted_sessions cs ON cs.session_id = qs.session_id
+),
+redirects_by_query AS (
+  SELECT
+    query,
+    COUNT(*) AS redirect_count
+  FROM base
+  GROUP BY query
+),
+conversions_by_query AS (
+  SELECT
+    query,
+    SUM(converted) AS user_converted
+  FROM session_conversions
+  GROUP BY query
+),
+paths_by_query AS (
+  SELECT
+    query,
+    ARRAY_AGG(DISTINCT url_path ORDER BY url_path) AS url_paths
+  FROM base
+  GROUP BY query
+)
+SELECT
+  r.query,
+  r.redirect_count::int,
+  COALESCE(c.user_converted, 0)::int AS user_converted,
+  COALESCE(p.url_paths, ARRAY[]::text[]) AS url_paths
+FROM redirects_by_query r
+LEFT JOIN conversions_by_query c
+  ON c.query = r.query
+LEFT JOIN paths_by_query p
+  ON p.query = r.query
+ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
+				[start, end, keywords]
+			);
+			console.log(`Found ${rows.length} queries matching CSV keywords`);
+			res.json(rows);
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/search-queries:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
+app.get("/api/youtube", async (req, res) => {
+	try {
+		const { start, end } = asRange(req);
+		const { prevStart, prevEnd } = getPreviousPeriod(start, end);
+		const client = await pool.connect();
+		try {
+			const [{ rows }, { rows: prevRows }] = await Promise.all([
+				// Current period
+				client.query(
 				`WITH base AS (
   SELECT
     btrim(regexp_replace(y.video_title, '[[:space:]]+', ' ', 'g')) AS post,
@@ -405,8 +778,90 @@ LEFT JOIN conversions_by_post c
   ON c.post = r.post
 ORDER BY c.user_converted DESC;`,
 				[start, end]
-			);
-			res.json(rows);
+			),
+			// Previous period
+			client.query(
+				`WITH base AS (
+  SELECT
+    btrim(regexp_replace(y.video_title, '[[:space:]]+', ' ', 'g')) AS post,
+    uwe.session_id,
+    uwe.event_id AS uwe_id
+  FROM umami_website_event uwe
+  JOIN directus_content dc
+    ON POSITION(dc.full_link IN ('https://medblocks.com' || uwe.url_path || '?' || uwe.url_query)) = 1
+  JOIN youtube y
+    ON y.video_id = dc.content_id
+    AND y.fetch_date = '2025-09-08'
+  WHERE uwe.created_at > $1::timestamptz
+    AND uwe.created_at < $2::timestamptz
+    AND uwe.url_query ILIKE '%utm_source=youtube%'
+),
+post_sessions AS (
+  SELECT DISTINCT post, session_id
+  FROM base
+),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
+session_conversions AS (
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
+  FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
+),
+redirects_by_post AS (
+  SELECT
+    post,
+    COUNT(*) AS redirect_count
+  FROM base
+  GROUP BY post
+),
+conversions_by_post AS (
+  SELECT
+    post,
+    SUM(converted) AS user_converted
+  FROM session_conversions
+  GROUP BY post
+)
+SELECT
+  r.post,
+  r.redirect_count::int,
+  COALESCE(c.user_converted, 0)::int AS user_converted
+FROM redirects_by_post r
+LEFT JOIN conversions_by_post c
+  ON c.post = r.post
+ORDER BY c.user_converted DESC;`,
+				[prevStart, prevEnd]
+			)
+		]);
+			res.json({ rows, prevRows });
 		} finally {
 			client.release();
 		}
@@ -419,11 +874,15 @@ ORDER BY c.user_converted DESC;`,
 app.get("/api/linkedin", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
+		const { prevStart, prevEnd } = getPreviousPeriod(start, end);
 		const client = await pool.connect();
     console.log("Got the date ranges", start, end);
+    console.log("Previous period:", prevStart, prevEnd);
     console.log("Querying LinkedIn data");
 		try {
-			const { rows } = await client.query(
+			const [{ rows }, { rows: prevRows }] = await Promise.all([
+				// Current period
+				client.query(
 				`WITH base AS (
   SELECT
     btrim(regexp_replace(l.post, '[[:space:]]+', ' ', 'g')) AS post,
@@ -516,9 +975,105 @@ LEFT JOIN conversions_by_post c
   ON c.post = r.post
 ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 				[start, end]
-			);
+			),
+			// Previous period
+			client.query(
+				`WITH base AS (
+  SELECT
+    btrim(regexp_replace(l.post, '[[:space:]]+', ' ', 'g')) AS post,
+    uwe.session_id,
+    uwe.event_id AS uwe_id
+  FROM umami_website_event uwe
+  JOIN LATERAL (
+    SELECT dc.*
+    FROM directus_content dc
+    WHERE dc.full_link <> ''
+      AND concat_ws(
+            '',
+            'https://medblocks.com',
+            uwe.url_path,
+            CASE WHEN COALESCE(uwe.url_query,'') <> '' THEN '?' || uwe.url_query ELSE '' END
+          ) LIKE dc.full_link || '%'
+    ORDER BY length(dc.full_link) DESC
+    LIMIT 1
+  ) dc ON TRUE
+  JOIN linkedin l
+    ON l.post_url_id = dc.content_id
+  WHERE uwe.created_at >= $1::timestamptz
+    AND uwe.created_at <  $2::timestamptz
+    AND uwe.url_query ILIKE '%utm_source=linkedin%'
+    AND NOT (
+      uwe.url_query ILIKE '%utm_medium=bio%' AND
+      uwe.url_query ILIKE '%utm_source=linkedin%'
+    )
+),
+post_sessions AS (
+  SELECT DISTINCT post, session_id
+  FROM base
+),
+unique_sessions AS (
+  SELECT DISTINCT session_id FROM base
+),
+first_conversion_events AS (
+  SELECT DISTINCT ON (us.session_id)
+    us.session_id,
+    u2.event_id AS website_event_id
+  FROM unique_sessions us
+  JOIN umami_website_event u2 
+    ON u2.session_id = us.session_id AND u2.event_type = 2
+  ORDER BY us.session_id, u2.created_at ASC
+),
+conversion_user_data AS (
+  SELECT DISTINCT ON (fce.session_id)
+    fce.session_id,
+    ued.string_value AS user_id,
+    ued.created_at AS event_data_created_at
+  FROM first_conversion_events fce
+  JOIN umami_event_data ued 
+    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
+  ORDER BY fce.session_id, ued.created_at ASC
+),
+converted_sessions AS (
+  SELECT cud.session_id
+  FROM conversion_user_data cud
+  JOIN directus_user du 
+    ON du.id = cud.user_id
+    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
+                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+),
+session_conversions AS (
+  SELECT ps.post, ps.session_id,
+    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
+  FROM post_sessions ps
+  LEFT JOIN converted_sessions cs ON cs.session_id = ps.session_id
+),
+redirects_by_post AS (
+  SELECT
+    post,
+    COUNT(DISTINCT uwe_id) AS redirect_count
+  FROM base
+  GROUP BY post
+),
+conversions_by_post AS (
+  SELECT
+    post,
+    SUM(converted) AS user_converted
+  FROM session_conversions
+  GROUP BY post
+)
+SELECT
+  r.post,
+  r.redirect_count::int,
+  COALESCE(c.user_converted, 0)::int AS user_converted
+FROM redirects_by_post r
+LEFT JOIN conversions_by_post c
+  ON c.post = r.post
+ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
+				[prevStart, prevEnd]
+			)
+		]);
       console.log("Got the LinkedIn data");
-			res.json(rows);
+			res.json({ rows, prevRows });
 		} finally {
 			client.release();
 		}

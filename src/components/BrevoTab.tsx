@@ -17,7 +17,6 @@ export function BrevoTab({ rows, loading, error, onRefresh }: BrevoTabProps) {
 
   return (
     <>
-      <div className="sectionTitle">📧 Brevo Email Campaigns</div>
       <div className="note-card">
         <strong>Note:</strong> Brevo data is not filtered by date range and shows all-time campaign statistics.
       </div>
@@ -44,4 +43,3 @@ export function BrevoTab({ rows, loading, error, onRefresh }: BrevoTabProps) {
     </>
   )
 }
-

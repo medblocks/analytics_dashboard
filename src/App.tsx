@@ -2,21 +2,32 @@ import { useState, useMemo } from 'react'
 import './App.css'
 
 // Types
-import type { Totals, TotalUsers, Row, TabType } from './shared/types'
+import type { Totals, TotalUsers, Row, QueryRow, TabType } from './shared/types'
 
 // Components
 import { DateRangeFilter } from './shared/components/DateRangeFilter'
-import { TabNavigation } from './shared/components/TabNavigation'
+import { Sidebar } from './components/Sidebar'
+import { DashboardLayout } from './components/DashboardLayout'
 import { OverviewTab } from './components/OverviewTab'
 import { LinkedInTab } from './components/LinkedInTab'
 import { YouTubeTab } from './components/YouTubeTab'
 import { GoogleTab } from './components/GoogleTab'
+import { SearchQueriesTab } from './components/SearchQueriesTab'
 import { BrevoTab } from './components/BrevoTab'
 
 // Hooks and Utils
 import { useDateRange } from './shared/hooks/useDateRange'
 import { useFetchData } from './shared/hooks/useFetchData'
 import { formatDateForParam } from './shared/utils/formatters'
+
+const tabTitles: Record<TabType, string> = {
+  overview: 'Dashboard Overview',
+  linkedin: 'LinkedIn Analytics',
+  youtube: 'YouTube Analytics',
+  google: 'Google Analytics',
+  'search-queries': 'Search Queries',
+  brevo: 'Brevo Email Marketing'
+};
 
 function App() {
   const [start, end, setStart, setEnd] = useDateRange()
@@ -30,39 +41,49 @@ function App() {
   // Data Fetching
   const { data: totalUsers, loading: totalUsersLoading } = useFetchData<TotalUsers>('/total-users', [])
   const { data: totals, loading: totalsLoading, error: totalsError } = useFetchData<Totals>(`/totals${query}`, [query])
-  const { data: ytRows, loading: ytLoading, error: ytError } = useFetchData<Row[]>(`/youtube${query}`, [query])
-  const { data: liRows, loading: liLoading, error: liError } = useFetchData<Row[]>(`/linkedin${query}`, [query])
-  const { data: googleRows, loading: googleLoading, error: googleError } = useFetchData<Row[]>(`/google${query}`, [query])
+  const { data: userGrowthData } = useFetchData<any[]>('/user-growth', []) // New Endpoint
+
+  const { data: ytData, loading: ytLoading, error: ytError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/youtube${query}`, [query])
+  const { data: liData, loading: liLoading, error: liError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/linkedin${query}`, [query])
+  const { data: googleData, loading: googleLoading, error: googleError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/google${query}`, [query])
+  
+  const ytRows = ytData?.rows || []
+  const ytPrevRows = ytData?.prevRows || []
+  const liRows = liData?.rows || []
+  const liPrevRows = liData?.prevRows || []
+  const googleRows = googleData?.rows || []
+  const googlePrevRows = googleData?.prevRows || []
+  const { data: searchQueryRows, loading: searchQueriesLoading, error: searchQueriesError } = useFetchData<QueryRow[]>(`/search-queries${query}`, [query])
   const { data: brevoRows, loading: brevoLoading, error: brevoError, refetch: refetchBrevo } = useFetchData<Row[]>(`/brevo`, [])
 
   // Consolidated error handling for Overview
   const overviewError = totalsError || liError || ytError || googleError || brevoError
 
+  const headerContent = (
+    <div className="header-content">
+      <h1 className="page-title">{tabTitles[activeTab]}</h1>
+      {/* Date Filter Controls - Hide on Brevo tab */}
+      {activeTab !== 'brevo' && (
+        <DateRangeFilter 
+          start={start} 
+          end={end} 
+          onStartChange={setStart} 
+          onEndChange={setEnd} 
+          onRefresh={() => setEnd(new Date(end))}
+          layout="horizontal"
+        />
+      )}
+    </div>
+  );
+
   return (
-    <div className="container">
-      <div className="header">
-        <h1>Analytics Dashboard</h1>
-        
-        {/* Date Filter Controls - Hide on Brevo tab */}
-        {activeTab !== 'brevo' && (
-          <DateRangeFilter 
-            start={start} 
-            end={end} 
-            onStartChange={setStart} 
-            onEndChange={setEnd} 
-            onRefresh={() => setEnd(new Date(end))} 
-          />
-        )}
-
-        {/* Tab Navigation */}
-        <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
-      </div>
-
+    <DashboardLayout
+      sidebar={<Sidebar activeTab={activeTab} onTabChange={setActiveTab} />}
+      header={headerContent}
+    >
       {/* Tab Content */}
       {activeTab === 'overview' && (
         <OverviewTab
-          start={start}
-          end={end}
           totals={totals}
           totalsLoading={totalsLoading}
           totalUsers={totalUsers}
@@ -76,6 +97,14 @@ function App() {
           brevoRows={brevoRows || []}
           brevoLoading={brevoLoading}
           error={overviewError}
+          userGrowthData={userGrowthData || undefined}
+          prevTotals={totals ? {
+            totalUsers: totals.prevTotalUsers ?? 0,
+            linkedinViews: totals.prevLinkedinViews ?? 0,
+            youtubeViews: totals.prevYoutubeViews ?? 0,
+            googleViews: totals.prevGoogleViews ?? 0,
+            other: totals.prevOther ?? 0
+          } : null}
         />
       )}
 
@@ -83,7 +112,8 @@ function App() {
         <LinkedInTab 
           start={start} 
           end={end} 
-          rows={liRows || []} 
+          rows={liRows} 
+          prevRows={liPrevRows}
           loading={liLoading} 
           error={liError} 
         />
@@ -93,7 +123,8 @@ function App() {
         <YouTubeTab 
           start={start} 
           end={end} 
-          rows={ytRows || []} 
+          rows={ytRows} 
+          prevRows={ytPrevRows}
           loading={ytLoading} 
           error={ytError} 
         />
@@ -103,9 +134,20 @@ function App() {
         <GoogleTab 
           start={start} 
           end={end} 
-          rows={googleRows || []} 
+          rows={googleRows} 
+          prevRows={googlePrevRows}
           loading={googleLoading} 
           error={googleError} 
+        />
+      )}
+
+      {activeTab === 'search-queries' && (
+        <SearchQueriesTab 
+          start={start} 
+          end={end} 
+          rows={searchQueryRows || []} 
+          loading={searchQueriesLoading} 
+          error={searchQueriesError} 
         />
       )}
 
@@ -117,7 +159,7 @@ function App() {
           onRefresh={refetchBrevo} 
         />
       )}
-    </div>
+    </DashboardLayout>
   )
 }
 

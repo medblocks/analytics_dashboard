@@ -4,6 +4,11 @@ export interface Totals {
   youtubeViews: number
   googleViews: number
   other: number
+  prevTotalUsers?: number
+  prevLinkedinViews?: number
+  prevYoutubeViews?: number
+  prevGoogleViews?: number
+  prevOther?: number
 }
 
 export interface TotalUsers {
@@ -17,9 +22,16 @@ export interface Row {
   queries?: string[]
 }
 
+export interface QueryRow {
+  query: string
+  redirect_count: number
+  user_converted: number
+  url_paths: string[]
+}
+
 export interface CalculatedTotals {
   redirects: number
   conversions: number
 }
 
-export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo'
+export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries'

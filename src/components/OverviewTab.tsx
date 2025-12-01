@@ -1,13 +1,10 @@
 import type { Totals, TotalUsers, Row } from '../shared/types'
 import { PrimaryCard } from '../shared/components/PrimaryCard'
 import { StatsCard } from '../shared/components/StatsCard'
-import { SummarySection } from '../shared/components/SummarySection'
 import { ErrorCard } from '../shared/components/ErrorCard'
-import { usePerformanceMetrics } from '../shared/hooks/usePerformanceMetrics'
+import { UserGrowthChart } from './UserGrowthChart'
 
 type OverviewTabProps = {
-  start: Date
-  end: Date
   totals: Totals | null
   totalsLoading: boolean
   totalUsers: TotalUsers | null
@@ -21,58 +18,97 @@ type OverviewTabProps = {
   brevoRows: Row[]
   brevoLoading: boolean
   error: string | null
+  userGrowthData?: any[]
+  prevTotals?: Totals | null
 }
 
 export function OverviewTab({
-  start,
-  end,
   totals,
   totalsLoading,
   totalUsers,
   totalUsersLoading,
-  liRows,
-  liLoading,
-  ytRows,
-  ytLoading,
-  googleRows,
-  googleLoading,
-  brevoRows,
-  brevoLoading,
-  error
+  error,
+  userGrowthData,
+  prevTotals
 }: OverviewTabProps) {
-  const liTotals = usePerformanceMetrics(liRows)
-  const ytTotals = usePerformanceMetrics(ytRows)
-  const googleTotals = usePerformanceMetrics(googleRows)
-  const brevoTotals = usePerformanceMetrics(brevoRows)
+
+  const getTrend = (current?: number, prev?: number) => {
+    if (prev === undefined || current === undefined) return undefined;
+    if (prev === 0) {
+      return {
+        direction: (current > 0 ? 'up' : 'neutral') as 'up' | 'neutral',
+        value: undefined
+      };
+    }
+    const diff = current - prev;
+    const pct = (diff / prev) * 100;
+    return {
+      direction: (diff > 0 ? 'up' : diff < 0 ? 'down' : 'neutral') as 'up' | 'down' | 'neutral',
+      value: `${Math.abs(pct).toFixed(1)}%`
+    };
+  };
+
+  const userTrend = getTrend(totals?.totalUsers, prevTotals?.totalUsers);
+  const liTrend = getTrend(totals?.linkedinViews, prevTotals?.linkedinViews);
+  const ytTrend = getTrend(totals?.youtubeViews, prevTotals?.youtubeViews);
+  const googleTrend = getTrend(totals?.googleViews, prevTotals?.googleViews);
 
   return (
     <>
       {/* Primary Total Users Box */}
-      <PrimaryCard 
-        title="Total Users (All Time)" 
-        value={totalUsers?.totalUsers ?? '—'} 
-        loading={totalUsersLoading} 
-      />
+      <div style={{ marginBottom: '32px' }}>
+        <PrimaryCard 
+            title="Total Users (All Time)" 
+            value={totalUsers?.totalUsers ?? '—'} 
+            loading={totalUsersLoading} 
+        />
+        
+      </div>
 
       {error && <ErrorCard message={error} />}
       
       <div className="page-content">
-        <h2 style={{ color: '#1a202c', marginBottom: '24px', textAlign: 'center' }}>
-          Statistics for {start.toLocaleDateString()} - {end.toLocaleDateString()}
-        </h2>
+        <h3 className="sectionTitle" style={{ fontSize: '18px', marginBottom: '20px' }}>Performance Overview</h3>
         <div className="cards">
-          <StatsCard title="Total Users" value={totals?.totalUsers ?? '-'} loading={totalsLoading} />
-          <StatsCard title="LinkedIn Views" value={totals?.linkedinViews ?? '-'} loading={totalsLoading} />
-          <StatsCard title="YouTube Views" value={totals?.youtubeViews ?? '-'} loading={totalsLoading} />
-          <StatsCard title="Google Views" value={totals?.googleViews ?? '-'} loading={totalsLoading} />
+          <StatsCard 
+            title="Total Users" 
+            value={totals?.totalUsers ?? '-'} 
+            loading={totalsLoading}
+            trend={userTrend?.direction}
+            trendValue={userTrend?.value}
+            prevValue={prevTotals?.totalUsers}
+          />
+          <StatsCard 
+            title="LinkedIn Views" 
+            value={totals?.linkedinViews ?? '-'} 
+            loading={totalsLoading}
+            trend={liTrend?.direction}
+            trendValue={liTrend?.value}
+            prevValue={prevTotals?.linkedinViews}
+          />
+          <StatsCard 
+            title="YouTube Views" 
+            value={totals?.youtubeViews ?? '-'} 
+            loading={totalsLoading}
+            trend={ytTrend?.direction}
+            trendValue={ytTrend?.value}
+            prevValue={prevTotals?.youtubeViews}
+          />
+          <StatsCard 
+            title="Google Views" 
+            value={totals?.googleViews ?? '-'} 
+            loading={totalsLoading}
+            trend={googleTrend?.direction}
+            trendValue={googleTrend?.value}
+            prevValue={prevTotals?.googleViews}
+          />
         </div>
       </div>
 
-      <SummarySection title="📱 LinkedIn Performance" rows={liRows} totals={liTotals} loading={liLoading} itemLabel="Posts" />
-      <SummarySection title="🎥 YouTube Performance" rows={ytRows} totals={ytTotals} loading={ytLoading} itemLabel="Videos" />
-      <SummarySection title="🔍 Google Search Performance" rows={googleRows} totals={googleTotals} loading={googleLoading} itemLabel="Pages" />
-      <SummarySection title="📧 Brevo Email Performance (All Time)" rows={brevoRows} totals={brevoTotals} loading={brevoLoading} itemLabel="Campaigns" />
+      {/* User Growth Chart */}
+      {userGrowthData && (
+          <UserGrowthChart data={userGrowthData} loading={totalUsersLoading} />
+      )}
     </>
   )
 }
-
