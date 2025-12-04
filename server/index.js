@@ -117,6 +117,12 @@ function getPreviousPeriod(start, end) {
 	};
 }
 
+// In-memory storage for custom keywords (overrides CSV when set)
+// NOTE: This is GLOBAL for all users and resets on server restart
+// For persistent storage, consider saving to database
+// For per-user keywords, consider using sessions or localStorage
+let customKeywords = null;
+
 // Helper function to read keywords from CSV file
 function getKeywordsFromCSV() {
 	try {
@@ -136,6 +142,15 @@ function getKeywordsFromCSV() {
 		console.error("Error reading CSV file:", error);
 		return [];
 	}
+}
+
+// Get current keywords (custom or from CSV)
+function getCurrentKeywords() {
+	if (customKeywords && customKeywords.length > 0) {
+		console.log(`Using ${customKeywords.length} custom keywords`);
+		return customKeywords;
+	}
+	return getKeywordsFromCSV();
 }
 
 // Health check endpoint - must be before other routes
@@ -571,14 +586,76 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 	}
 });
 
+// Get current keywords (custom or default from CSV)
+app.get("/api/keywords", (req, res) => {
+	try {
+		const keywords = getCurrentKeywords();
+		const isCustom = customKeywords !== null && customKeywords.length > 0;
+		res.json({ 
+			keywords, 
+			count: keywords.length,
+			isCustom 
+		});
+	} catch (e) {
+		console.error("Error in /api/keywords:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
+// Update keywords with custom list
+app.post("/api/keywords", (req, res) => {
+	try {
+		const { keywords } = req.body;
+		
+		if (!keywords || !Array.isArray(keywords)) {
+			return res.status(400).json({ error: "Keywords must be an array" });
+		}
+		
+		// Filter and clean keywords
+		const cleanedKeywords = keywords
+			.map(k => k?.trim())
+			.filter(k => k && k.length > 0);
+		
+		customKeywords = cleanedKeywords;
+		console.log(`Updated to ${cleanedKeywords.length} custom keywords`);
+		
+		res.json({ 
+			success: true, 
+			count: cleanedKeywords.length,
+			message: "Keywords updated successfully" 
+		});
+	} catch (e) {
+		console.error("Error in POST /api/keywords:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
+// Reset to default CSV keywords
+app.delete("/api/keywords", (req, res) => {
+	try {
+		customKeywords = null;
+		const defaultKeywords = getKeywordsFromCSV();
+		console.log(`Reset to default CSV keywords (${defaultKeywords.length} keywords)`);
+		
+		res.json({ 
+			success: true, 
+			count: defaultKeywords.length,
+			message: "Keywords reset to default CSV" 
+		});
+	} catch (e) {
+		console.error("Error in DELETE /api/keywords:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 app.get("/api/search-queries", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 		
-		// Get keywords from CSV file
-		const keywords = getKeywordsFromCSV();
+		// Get current keywords (custom or from CSV)
+		const keywords = getCurrentKeywords();
 		if (keywords.length === 0) {
-			return res.status(500).json({ error: "No keywords found in CSV file" });
+			return res.status(500).json({ error: "No keywords found" });
 		}
 		
 		const client = await pool.connect();
