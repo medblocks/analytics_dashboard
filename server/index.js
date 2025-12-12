@@ -1261,6 +1261,110 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`
 	}
 });
 
+app.get("/api/youtube-rankings", async (req, res) => {
+	try {
+		const { start, end } = asRange(req);
+		const client = await pool.connect();
+		
+		console.log(`Fetching YouTube rankings for date range: ${start} to ${end}`);
+		
+		try {
+			const { rows } = await client.query(
+				`WITH latest_keywords AS (
+					-- Get distinct keywords with their watch_time from the latest date in range
+					SELECT DISTINCT ON (keyword) 
+						keyword,
+						fetch_date,
+						watch_time_hours,
+						views,
+						average_view_duration,
+						impressions,
+						impressions_ctr
+					FROM yt_keywords
+					WHERE fetch_date >= $1::date AND fetch_date <= $2::date
+					ORDER BY keyword, fetch_date DESC
+				),
+				latest_run AS (
+					-- Get the latest fetch_run_id from yt_search_ranking within the date range
+					SELECT fetch_run_id
+					FROM yt_search_ranking
+					WHERE fetch_date >= $1::date AND fetch_date <= $2::date
+					ORDER BY fetched_at DESC
+					LIMIT 1
+				),
+				ranking_data AS (
+					-- Get ranking data for keywords from latest run
+					SELECT 
+						r.keyword,
+						r.position,
+						r.channel_name,
+						r.video_id,
+						r.video_title,
+						r.result_type
+					FROM yt_search_ranking r
+					CROSS JOIN latest_run lr
+					WHERE r.fetch_run_id = lr.fetch_run_id
+						AND r.keyword IN (SELECT keyword FROM latest_keywords)
+				),
+				top_3_results AS (
+					-- Get top 3 positions for each keyword
+					SELECT 
+						keyword,
+						json_agg(
+							json_build_object(
+								'position', position,
+								'channel_name', channel_name,
+								'video_id', video_id,
+								'video_title', video_title,
+								'result_type', result_type
+							) ORDER BY position
+						) AS top_3
+					FROM ranking_data
+					WHERE position <= 3
+					GROUP BY keyword
+				),
+				sidharth_in_4_to_10 AS (
+					-- Get Sidharth Ramesh's videos in positions 4-10
+					SELECT 
+						keyword,
+						json_agg(
+							json_build_object(
+								'position', position,
+								'video_id', video_id,
+								'video_title', video_title
+							) ORDER BY position
+						) AS sidharth_videos
+					FROM ranking_data
+					WHERE position BETWEEN 4 AND 10
+						AND channel_name = 'Sidharth Ramesh'
+					GROUP BY keyword
+				)
+				SELECT 
+					lk.keyword,
+					lk.fetch_date,
+					lk.watch_time_hours,
+					lk.average_view_duration,
+					COALESCE(t.top_3, '[]'::json) AS top_3,
+					COALESCE(s.sidharth_videos, '[]'::json) AS sidharth_videos
+				FROM latest_keywords lk
+				LEFT JOIN top_3_results t ON t.keyword = lk.keyword
+				LEFT JOIN sidharth_in_4_to_10 s ON s.keyword = lk.keyword
+				ORDER BY lk.watch_time_hours DESC NULLS LAST`,
+				[start, end]
+			);
+			
+			console.log(`Processed ${rows.length} keywords with rankings`);
+			res.json(rows);
+			
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/youtube-rankings:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 // Serve the React app for all other routes (SPA routing) in production
 // This catch-all route must be last - it handles client-side routing
 if (process.env.NODE_ENV === "production") {

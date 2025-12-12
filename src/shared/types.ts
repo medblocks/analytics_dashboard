@@ -29,9 +29,36 @@ export interface QueryRow {
   url_paths: string[]
 }
 
+export interface YTRankingPosition {
+  position: number;
+  channel_name?: string | null;
+  video_id: string | null;
+  video_title: string;
+  result_type?: string;
+}
+
+export interface YTRankingRow {
+  keyword: string;
+  fetchDate: string;
+  topThree: YTRankingPosition[];
+  sidharthVideos: YTRankingPosition[];
+  watchTimeHours?: number;
+  averageViewDuration?: string;
+}
+
+// API response types (snake_case from backend)
+export interface YTRankingApiResponse {
+  keyword: string;
+  fetch_date: string;
+  watch_time_hours: number;
+  average_view_duration: string;
+  top_3: YTRankingPosition[];
+  sidharth_videos: YTRankingPosition[];
+}
+
 export interface CalculatedTotals {
   redirects: number
   conversions: number
 }
 
-export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries'
+export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking'

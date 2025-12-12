@@ -4,7 +4,8 @@ import {
   Youtube, 
   Chrome, 
   Search, 
-  Mail
+  Mail,
+  Trophy
 } from 'lucide-react';
 import type { TabType } from '../shared/types';
 
@@ -20,6 +21,7 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     { id: 'youtube', label: 'YouTube', icon: Youtube },
     { id: 'google', label: 'Google', icon: Chrome },
     { id: 'search-queries', label: 'Search Queries', icon: Search },
+    { id: 'yt-search-ranking', label: 'YT Rankings', icon: Trophy },
     { id: 'brevo', label: 'Brevo', icon: Mail },
   ] as const;
 

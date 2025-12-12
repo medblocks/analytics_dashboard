@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import './App.css'
 
 // Types
-import type { Totals, TotalUsers, Row, QueryRow, TabType } from './shared/types'
+import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse } from './shared/types'
 
 // Components
 import { DateRangeFilter } from './shared/components/DateRangeFilter'
@@ -13,6 +13,7 @@ import { LinkedInTab } from './components/LinkedInTab'
 import { YouTubeTab } from './components/YouTubeTab'
 import { GoogleTab } from './components/GoogleTab'
 import { SearchQueriesTab } from './components/SearchQueriesTab'
+import { YTSearchRankingTab } from './components/YTSearchRankingTab'
 import { BrevoTab } from './components/BrevoTab'
 
 // Hooks and Utils
@@ -26,6 +27,7 @@ const tabTitles: Record<TabType, string> = {
   youtube: 'YouTube Analytics',
   google: 'Google Analytics',
   'search-queries': 'Search Queries',
+  'yt-search-ranking': 'YouTube Search Ranking',
   brevo: 'Brevo Email Marketing'
 };
 
@@ -54,6 +56,20 @@ function App() {
   const googleRows = googleData?.rows || []
   const googlePrevRows = googleData?.prevRows || []
   const { data: searchQueryRows, loading: searchQueriesLoading, error: searchQueriesError } = useFetchData<QueryRow[]>(`/search-queries${query}`, [query])
+  const { data: ytRankingApiData, loading: ytRankingLoading, error: ytRankingError } = useFetchData<YTRankingApiResponse[]>(`/youtube-rankings${query}`, [query])
+  
+  // Transform API response to UI format
+  const ytRankingRows: YTRankingRow[] = useMemo(() => {
+    if (!ytRankingApiData) return []
+    return ytRankingApiData.map((row) => ({
+      keyword: row.keyword,
+      fetchDate: row.fetch_date,
+      watchTimeHours: row.watch_time_hours,
+      averageViewDuration: row.average_view_duration,
+      topThree: row.top_3 || [],
+      sidharthVideos: row.sidharth_videos || [],
+    }))
+  }, [ytRankingApiData])
   const { data: brevoRows, loading: brevoLoading, error: brevoError, refetch: refetchBrevo } = useFetchData<Row[]>(`/brevo`, [])
 
   // Consolidated error handling for Overview
@@ -148,6 +164,16 @@ function App() {
           rows={searchQueryRows || []} 
           loading={searchQueriesLoading} 
           error={searchQueriesError} 
+        />
+      )}
+
+      {activeTab === 'yt-search-ranking' && (
+        <YTSearchRankingTab 
+          start={start} 
+          end={end} 
+          rows={ytRankingRows || []} 
+          loading={ytRankingLoading} 
+          error={ytRankingError} 
         />
       )}
 
