@@ -121,12 +121,25 @@ function getPreviousPeriod(start, end) {
 // NOTE: This is GLOBAL for all users and resets on server restart
 // For persistent storage, consider saving to database
 // For per-user keywords, consider using sessions or localStorage
-let customKeywords = null;
+let customKeywordsByCategory = {
+	openehr: null,
+	fhir: null
+};
 
 // Helper function to read keywords from CSV file
-function getKeywordsFromCSV() {
+function getKeywordsFromCSV(category = 'openehr') {
 	try {
-		const csvPath = path.join(__dirname, "../openehr_all-keywords_us_2025-12-01.csv");
+		const csvFiles = {
+			openehr: path.join(__dirname, "../openehr_all-keywords_us_2025-12-01.csv"),
+			fhir: path.join(__dirname, "../fhir_keywords.csv")
+		};
+		
+		const csvPath = csvFiles[category];
+		if (!csvPath) {
+			console.error(`Unknown category: ${category}`);
+			return [];
+		}
+		
 		const csvContent = fs.readFileSync(csvPath, "utf-8");
 		const lines = csvContent.split("\n");
 		
@@ -136,21 +149,35 @@ function getKeywordsFromCSV() {
 			.map(line => line.split(",")[0]?.trim()) // Get first column
 			.filter(keyword => keyword && keyword.length > 0); // Remove empty entries
 		
-		console.log(`Loaded ${keywords.length} keywords from CSV`);
+		console.log(`Loaded ${keywords.length} ${category} keywords from CSV`);
 		return keywords;
 	} catch (error) {
-		console.error("Error reading CSV file:", error);
+		console.error(`Error reading CSV file for ${category}:`, error);
 		return [];
 	}
 }
 
 // Get current keywords (custom or from CSV)
-function getCurrentKeywords() {
+function getCurrentKeywords(category = 'openehr') {
+	const customKeywords = customKeywordsByCategory[category];
 	if (customKeywords && customKeywords.length > 0) {
-		console.log(`Using ${customKeywords.length} custom keywords`);
+		console.log(`Using ${customKeywords.length} custom ${category} keywords`);
 		return customKeywords;
 	}
-	return getKeywordsFromCSV();
+	return getKeywordsFromCSV(category);
+}
+
+// Get all keywords from all categories combined
+function getAllKeywords() {
+	const categories = ['openehr', 'fhir'];
+	const allKeywords = [];
+	
+	categories.forEach(category => {
+		const keywords = getCurrentKeywords(category);
+		allKeywords.push(...keywords);
+	});
+	
+	return allKeywords;
 }
 
 // Health check endpoint - must be before other routes
@@ -589,12 +616,15 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 // Get current keywords (custom or default from CSV)
 app.get("/api/keywords", (req, res) => {
 	try {
-		const keywords = getCurrentKeywords();
-		const isCustom = customKeywords !== null && customKeywords.length > 0;
+		const category = req.query.category || 'openehr';
+		const keywords = getCurrentKeywords(category);
+		const isCustom = customKeywordsByCategory[category] !== null && customKeywordsByCategory[category]?.length > 0;
+		
 		res.json({ 
 			keywords, 
 			count: keywords.length,
-			isCustom 
+			isCustom,
+			category 
 		});
 	} catch (e) {
 		console.error("Error in /api/keywords:", e);
@@ -602,13 +632,40 @@ app.get("/api/keywords", (req, res) => {
 	}
 });
 
+// Get all keyword categories at once
+app.get("/api/keywords/all", (req, res) => {
+	try {
+		const categories = ['openehr', 'fhir'];
+		const result = {};
+		
+		categories.forEach(category => {
+			const keywords = getCurrentKeywords(category);
+			const isCustom = customKeywordsByCategory[category] !== null && customKeywordsByCategory[category]?.length > 0;
+			result[category] = {
+				keywords,
+				count: keywords.length,
+				isCustom
+			};
+		});
+		
+		res.json(result);
+	} catch (e) {
+		console.error("Error in /api/keywords/all:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 // Update keywords with custom list
 app.post("/api/keywords", (req, res) => {
 	try {
-		const { keywords } = req.body;
+		const { keywords, category = 'openehr' } = req.body;
 		
 		if (!keywords || !Array.isArray(keywords)) {
 			return res.status(400).json({ error: "Keywords must be an array" });
+		}
+		
+		if (!['openehr', 'fhir'].includes(category)) {
+			return res.status(400).json({ error: "Invalid category. Must be 'openehr' or 'fhir'" });
 		}
 		
 		// Filter and clean keywords
@@ -616,13 +673,14 @@ app.post("/api/keywords", (req, res) => {
 			.map(k => k?.trim())
 			.filter(k => k && k.length > 0);
 		
-		customKeywords = cleanedKeywords;
-		console.log(`Updated to ${cleanedKeywords.length} custom keywords`);
+		customKeywordsByCategory[category] = cleanedKeywords;
+		console.log(`Updated to ${cleanedKeywords.length} custom ${category} keywords`);
 		
 		res.json({ 
 			success: true, 
 			count: cleanedKeywords.length,
-			message: "Keywords updated successfully" 
+			category,
+			message: `${category} keywords updated successfully` 
 		});
 	} catch (e) {
 		console.error("Error in POST /api/keywords:", e);
@@ -633,14 +691,21 @@ app.post("/api/keywords", (req, res) => {
 // Reset to default CSV keywords
 app.delete("/api/keywords", (req, res) => {
 	try {
-		customKeywords = null;
-		const defaultKeywords = getKeywordsFromCSV();
-		console.log(`Reset to default CSV keywords (${defaultKeywords.length} keywords)`);
+		const category = req.query.category || 'openehr';
+		
+		if (!['openehr', 'fhir'].includes(category)) {
+			return res.status(400).json({ error: "Invalid category. Must be 'openehr' or 'fhir'" });
+		}
+		
+		customKeywordsByCategory[category] = null;
+		const defaultKeywords = getKeywordsFromCSV(category);
+		console.log(`Reset to default CSV keywords for ${category} (${defaultKeywords.length} keywords)`);
 		
 		res.json({ 
 			success: true, 
 			count: defaultKeywords.length,
-			message: "Keywords reset to default CSV" 
+			category,
+			message: `${category} keywords reset to default CSV` 
 		});
 	} catch (e) {
 		console.error("Error in DELETE /api/keywords:", e);
@@ -652,8 +717,8 @@ app.get("/api/search-queries", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
 		
-		// Get current keywords (custom or from CSV)
-		const keywords = getCurrentKeywords();
+		// Get all keywords from all categories (custom or from CSV)
+		const keywords = getAllKeywords();
 		if (keywords.length === 0) {
 			return res.status(500).json({ error: "No keywords found" });
 		}

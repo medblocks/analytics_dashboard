@@ -1,29 +1,41 @@
 import { useState, useEffect } from 'react'
 import './KeywordEditorDialog.css'
 
+type Category = 'openehr' | 'fhir'
+
+type CategoryData = {
+  keywords: string[]
+  isCustom: boolean
+}
+
 type KeywordEditorDialogProps = {
   isOpen: boolean
   onClose: () => void
-  onSave: (keywords: string[]) => void
-  currentKeywords: string[]
-  isCustom: boolean
+  onSave: (keywords: string[], category: Category) => void
+  categoriesData: Record<Category, CategoryData>
 }
 
 export function KeywordEditorDialog({ 
   isOpen, 
   onClose, 
-  onSave, 
-  currentKeywords,
-  isCustom 
+  onSave,
+  categoriesData
 }: KeywordEditorDialogProps) {
-  const [keywordsText, setKeywordsText] = useState('')
+  const [activeTab, setActiveTab] = useState<Category>('openehr')
+  const [keywordsText, setKeywordsText] = useState<Record<Category, string>>({
+    openehr: '',
+    fhir: ''
+  })
   const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
-      setKeywordsText(currentKeywords.join('\n'))
+      setKeywordsText({
+        openehr: categoriesData.openehr.keywords.join('\n'),
+        fhir: categoriesData.fhir.keywords.join('\n')
+      })
     }
-  }, [isOpen, currentKeywords])
+  }, [isOpen, categoriesData])
 
   if (!isOpen) return null
 
@@ -31,12 +43,12 @@ export function KeywordEditorDialog({
     setIsSaving(true)
     try {
       // Split by newlines and filter empty lines
-      const keywords = keywordsText
+      const keywords = keywordsText[activeTab]
         .split('\n')
         .map(k => k.trim())
         .filter(k => k.length > 0)
       
-      await onSave(keywords)
+      await onSave(keywords, activeTab)
       onClose()
     } catch (error) {
       console.error('Error saving keywords:', error)
@@ -47,17 +59,18 @@ export function KeywordEditorDialog({
   }
 
   const handleReset = async () => {
-    if (!confirm('Are you sure you want to reset to the default CSV keywords?')) {
+    const categoryLabel = activeTab === 'openehr' ? 'openEHR' : 'FHIR'
+    if (!confirm(`Are you sure you want to reset ${categoryLabel} keywords to the default CSV?`)) {
       return
     }
 
     setIsSaving(true)
     try {
-      const response = await fetch('/api/keywords', { method: 'DELETE' })
+      const response = await fetch(`/api/keywords?category=${activeTab}`, { method: 'DELETE' })
       if (!response.ok) throw new Error('Failed to reset keywords')
       
       const data = await response.json()
-      alert(`Reset successful! ${data.count} keywords loaded from CSV.`)
+      alert(`Reset successful! ${data.count} ${categoryLabel} keywords loaded from CSV.`)
       window.location.reload() // Reload to fetch fresh data
     } catch (error) {
       console.error('Error resetting keywords:', error)
@@ -67,20 +80,40 @@ export function KeywordEditorDialog({
     }
   }
 
-  const keywordCount = keywordsText.split('\n').filter(k => k.trim().length > 0).length
+  const currentCategoryData = categoriesData[activeTab]
+  const keywordCount = keywordsText[activeTab].split('\n').filter(k => k.trim().length > 0).length
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog-content" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <h2>Edit Search Keywords</h2>
-          <button className="close-button" onClick={onClose} disabled={isSaving}>×</button>
+          <div className="dialog-header-top">
+            <h2>Edit Search Keywords</h2>
+            <button className="close-button" onClick={onClose} disabled={isSaving}>×</button>
+          </div>
+          
+          <div className="dialog-tabs">
+            <button
+              className={`dialog-tab ${activeTab === 'openehr' ? 'active' : ''}`}
+              onClick={() => setActiveTab('openehr')}
+              disabled={isSaving}
+            >
+              openEHR Keywords
+            </button>
+            <button
+              className={`dialog-tab ${activeTab === 'fhir' ? 'active' : ''}`}
+              onClick={() => setActiveTab('fhir')}
+              disabled={isSaving}
+            >
+              FHIR Keywords
+            </button>
+          </div>
         </div>
         
         <div className="dialog-body">
           <div className="dialog-info">
             <p>
-              {isCustom ? (
+              {currentCategoryData.isCustom ? (
                 <span className="custom-badge">Using Custom Keywords</span>
               ) : (
                 <span className="default-badge">Using Default CSV Keywords</span>
@@ -95,8 +128,8 @@ export function KeywordEditorDialog({
           
           <textarea
             className="keyword-textarea"
-            value={keywordsText}
-            onChange={(e) => setKeywordsText(e.target.value)}
+            value={keywordsText[activeTab]}
+            onChange={(e) => setKeywordsText(prev => ({ ...prev, [activeTab]: e.target.value }))}
             placeholder="Enter keywords, one per line..."
             rows={20}
             disabled={isSaving}
@@ -105,7 +138,7 @@ export function KeywordEditorDialog({
         
         <div className="dialog-footer">
           <div className="footer-left">
-            {isCustom && (
+            {currentCategoryData.isCustom && (
               <button 
                 className="reset-button" 
                 onClick={handleReset}
