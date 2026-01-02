@@ -852,7 +852,7 @@ app.get("/api/youtube", async (req, res) => {
     ON POSITION(dc.full_link IN ('https://medblocks.com' || uwe.url_path || '?' || uwe.url_query)) = 1
   JOIN youtube y
     ON y.video_id = dc.content_id
-    AND y.fetch_date = '2025-09-08'
+    AND y.fetch_date = $2::date
   WHERE uwe.created_at > $1::timestamptz
     AND uwe.created_at < $2::timestamptz
     AND uwe.url_query ILIKE '%utm_source=youtube%'
@@ -933,7 +933,7 @@ ORDER BY c.user_converted DESC;`,
     ON POSITION(dc.full_link IN ('https://medblocks.com' || uwe.url_path || '?' || uwe.url_query)) = 1
   JOIN youtube y
     ON y.video_id = dc.content_id
-    AND y.fetch_date = '2025-09-08'
+    AND y.fetch_date = $2::date
   WHERE uwe.created_at > $1::timestamptz
     AND uwe.created_at < $2::timestamptz
     AND uwe.url_query ILIKE '%utm_source=youtube%'
