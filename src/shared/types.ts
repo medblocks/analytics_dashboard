@@ -22,6 +22,22 @@ export interface Row {
   queries?: string[]
 }
 
+// Extended Row with content_id (for LinkedIn Raw tab)
+export interface LinkedInRawRow extends Row {
+  content_id: string | null
+}
+
+// Extended Row with YouTube video info (for YouTube Raw tab)
+export interface YouTubeRawRow extends Row {
+  videoId: string | null
+  videoTitle: string | null
+  channelTitle: string | null
+  ytViewCount: number | null
+  ytLikeCount: number | null
+  ytCommentCount: number | null
+  thumbnailUrl: string | null
+}
+
 export interface QueryRow {
   query: string
   redirect_count: number
@@ -61,4 +77,51 @@ export interface CalculatedTotals {
   conversions: number
 }
 
-export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking'
+// Raw Umami Analytics Types
+export interface UmamiSourceRow {
+  source: string
+  event_count: number
+  unique_sessions: number
+  conversions: number
+}
+
+export interface UmamiReferrerRow {
+  referrer: string
+  event_count: number
+  unique_sessions: number
+  conversions: number
+}
+
+export interface UmamiPathRow {
+  path: string
+  event_count: number
+  unique_sessions: number
+  conversions: number
+}
+
+export interface UmamiEventRow {
+  url_path: string
+  url_query: string | null
+  referrer_domain: string | null
+  event_type: number
+  session_id: string
+  created_at: string
+}
+
+export interface UmamiSummary {
+  total_events: number
+  unique_sessions: number
+  total_conversions: number
+  unique_paths: number
+  unique_referrers: number
+}
+
+export interface UmamiRawData {
+  summary: UmamiSummary
+  bySource: UmamiSourceRow[]
+  byReferrer: UmamiReferrerRow[]
+  byPath: UmamiPathRow[]
+  topEvents: UmamiEventRow[]
+}
+
+export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw'

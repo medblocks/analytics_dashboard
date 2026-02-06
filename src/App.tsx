@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import './App.css'
 
 // Types
-import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse } from './shared/types'
+import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse, UmamiRawData, YouTubeRawRow, LinkedInRawRow } from './shared/types'
 
 // Components
 import { DateRangeFilter } from './shared/components/DateRangeFilter'
@@ -15,6 +15,9 @@ import { GoogleTab } from './components/GoogleTab'
 import { SearchQueriesTab } from './components/SearchQueriesTab'
 import { YTSearchRankingTab } from './components/YTSearchRankingTab'
 import { BrevoTab } from './components/BrevoTab'
+import { RawUmamiTab } from './components/RawUmamiTab'
+import { LinkedInRawTab } from './components/LinkedInRawTab'
+import { YouTubeRawTab } from './components/YouTubeRawTab'
 
 // Hooks and Utils
 import { useDateRange } from './shared/hooks/useDateRange'
@@ -24,11 +27,14 @@ import { formatDateForParam } from './shared/utils/formatters'
 const tabTitles: Record<TabType, string> = {
   overview: 'Dashboard Overview',
   linkedin: 'LinkedIn Analytics',
+  'linkedin-raw': 'LinkedIn Raw Analytics',
   youtube: 'YouTube Analytics',
+  'youtube-raw': 'YouTube Raw Analytics',
   google: 'Google Analytics',
   'search-queries': 'Search Queries',
   'yt-search-ranking': 'YouTube Search Ranking',
-  brevo: 'Brevo Email Marketing'
+  brevo: 'Brevo Email Marketing',
+  'raw-umami': 'Raw Umami Analytics'
 };
 
 function App() {
@@ -71,6 +77,16 @@ function App() {
     }))
   }, [ytRankingApiData])
   const { data: brevoRows, loading: brevoLoading, error: brevoError, refetch: refetchBrevo } = useFetchData<Row[]>(`/brevo`, [])
+  const { data: rawUmamiData, loading: rawUmamiLoading, error: rawUmamiError } = useFetchData<UmamiRawData>(`/umami-raw${query}`, [query])
+  
+  // Raw LinkedIn and YouTube data (mapped to directus_content only, no scraping required)
+  const { data: liRawData, loading: liRawLoading, error: liRawError } = useFetchData<{rows: LinkedInRawRow[], prevRows: LinkedInRawRow[]}>(`/linkedin-raw${query}`, [query])
+  const { data: ytRawData, loading: ytRawLoading, error: ytRawError } = useFetchData<{rows: YouTubeRawRow[], prevRows: YouTubeRawRow[]}>(`/youtube-raw${query}`, [query])
+  
+  const liRawRows = liRawData?.rows || []
+  const liRawPrevRows = liRawData?.prevRows || []
+  const ytRawRows = ytRawData?.rows || []
+  const ytRawPrevRows = ytRawData?.prevRows || []
 
   // Consolidated error handling for Overview
   const overviewError = totalsError || liError || ytError || googleError || brevoError
@@ -135,6 +151,17 @@ function App() {
         />
       )}
 
+      {activeTab === 'linkedin-raw' && (
+        <LinkedInRawTab 
+          start={start} 
+          end={end} 
+          rows={liRawRows} 
+          prevRows={liRawPrevRows}
+          loading={liRawLoading} 
+          error={liRawError} 
+        />
+      )}
+
       {activeTab === 'youtube' && (
         <YouTubeTab 
           start={start} 
@@ -143,6 +170,17 @@ function App() {
           prevRows={ytPrevRows}
           loading={ytLoading} 
           error={ytError} 
+        />
+      )}
+
+      {activeTab === 'youtube-raw' && (
+        <YouTubeRawTab 
+          start={start} 
+          end={end} 
+          rows={ytRawRows} 
+          prevRows={ytRawPrevRows}
+          loading={ytRawLoading} 
+          error={ytRawError} 
         />
       )}
 
@@ -183,6 +221,14 @@ function App() {
           loading={brevoLoading} 
           error={brevoError} 
           onRefresh={refetchBrevo} 
+        />
+      )}
+
+      {activeTab === 'raw-umami' && (
+        <RawUmamiTab 
+          data={rawUmamiData || null} 
+          loading={rawUmamiLoading} 
+          error={rawUmamiError} 
         />
       )}
     </DashboardLayout>

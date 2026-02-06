@@ -5,7 +5,8 @@ import {
   Chrome, 
   Search, 
   Mail,
-  Trophy
+  Trophy,
+  Database
 } from 'lucide-react';
 import type { TabType } from '../shared/types';
 
@@ -18,11 +19,14 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
   const menuItems = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'linkedin', label: 'LinkedIn', icon: Linkedin },
+    { id: 'linkedin-raw', label: 'LinkedIn Raw', icon: Linkedin },
     { id: 'youtube', label: 'YouTube', icon: Youtube },
+    { id: 'youtube-raw', label: 'YouTube Raw', icon: Youtube },
     { id: 'google', label: 'Google', icon: Chrome },
     { id: 'search-queries', label: 'Search Queries', icon: Search },
     { id: 'yt-search-ranking', label: 'YT Rankings', icon: Trophy },
     { id: 'brevo', label: 'Brevo', icon: Mail },
+    { id: 'raw-umami', label: 'Raw Umami', icon: Database },
   ] as const;
 
   return (
