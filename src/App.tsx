@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import './App.css'
 
 // Types
-import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse, UmamiRawData, YouTubeRawRow, LinkedInRawRow } from './shared/types'
+import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse, UmamiRawData, YouTubeRawRow, LinkedInRawRow, ContactUsData } from './shared/types'
 
 // Components
 import { DateRangeFilter } from './shared/components/DateRangeFilter'
@@ -18,6 +18,7 @@ import { BrevoTab } from './components/BrevoTab'
 import { RawUmamiTab } from './components/RawUmamiTab'
 import { LinkedInRawTab } from './components/LinkedInRawTab'
 import { YouTubeRawTab } from './components/YouTubeRawTab'
+import { ContactUsTab } from './components/ContactUsTab'
 
 // Hooks and Utils
 import { useDateRange } from './shared/hooks/useDateRange'
@@ -34,6 +35,7 @@ const tabTitles: Record<TabType, string> = {
   'search-queries': 'Search Queries',
   'yt-search-ranking': 'YouTube Search Ranking',
   brevo: 'Brevo Email Marketing',
+  'contact-us': 'Contact Us Analytics',
   'raw-umami': 'Raw Umami Analytics'
 };
 
@@ -78,6 +80,7 @@ function App() {
   }, [ytRankingApiData])
   const { data: brevoRows, loading: brevoLoading, error: brevoError, refetch: refetchBrevo } = useFetchData<Row[]>(`/brevo`, [])
   const { data: rawUmamiData, loading: rawUmamiLoading, error: rawUmamiError } = useFetchData<UmamiRawData>(`/umami-raw${query}`, [query])
+  const { data: contactUsData, loading: contactUsLoading, error: contactUsError } = useFetchData<ContactUsData>(`/contact-us${query}`, [query])
   
   // Raw LinkedIn and YouTube data (mapped to directus_content only, no scraping required)
   const { data: liRawData, loading: liRawLoading, error: liRawError } = useFetchData<{rows: LinkedInRawRow[], prevRows: LinkedInRawRow[]}>(`/linkedin-raw${query}`, [query])
@@ -221,6 +224,14 @@ function App() {
           loading={brevoLoading} 
           error={brevoError} 
           onRefresh={refetchBrevo} 
+        />
+      )}
+
+      {activeTab === 'contact-us' && (
+        <ContactUsTab 
+          data={contactUsData || null} 
+          loading={contactUsLoading} 
+          error={contactUsError} 
         />
       )}
 

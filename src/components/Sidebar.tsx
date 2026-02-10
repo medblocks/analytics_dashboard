@@ -6,7 +6,8 @@ import {
   Search, 
   Mail,
   Trophy,
-  Database
+  Database,
+  Phone
 } from 'lucide-react';
 import type { TabType } from '../shared/types';
 
@@ -26,6 +27,7 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     { id: 'search-queries', label: 'Search Queries', icon: Search },
     { id: 'yt-search-ranking', label: 'YT Rankings', icon: Trophy },
     { id: 'brevo', label: 'Brevo', icon: Mail },
+    { id: 'contact-us', label: 'Contact Us', icon: Phone },
     { id: 'raw-umami', label: 'Raw Umami', icon: Database },
   ] as const;
 

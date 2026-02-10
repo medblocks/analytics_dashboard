@@ -2099,6 +2099,102 @@ app.get("/api/youtube-rankings", async (req, res) => {
 	}
 });
 
+// Contact Us Analytics - Tracks contact page visits and form submissions
+app.get("/api/contact-us", async (req, res) => {
+	try {
+		const { start, end } = asRange(req);
+		const client = await pool.connect();
+		
+		// Calculate previous period for comparison
+		const startDate = new Date(start);
+		const endDate = new Date(end);
+		const durationMs = endDate.getTime() - startDate.getTime();
+		const prevStart = new Date(startDate.getTime() - durationMs).toISOString();
+		const prevEnd = start;
+		
+		console.log(`Fetching Contact Us data for date range: ${start} to ${end}`);
+		
+		try {
+			const [
+				{ rows: currentPeriod },
+				{ rows: previousPeriod },
+				{ rows: recentEvents }
+			] = await Promise.all([
+				// Current period counts - query event_name column directly from umami_website_event
+				client.query(
+					`SELECT 
+						COALESCE(SUM(CASE WHEN event_name = 'contact-page-visit' THEN 1 ELSE 0 END), 0)::int AS page_visits,
+						COALESCE(SUM(CASE WHEN event_name = 'contact-page-form-submit' THEN 1 ELSE 0 END), 0)::int AS form_submissions
+					FROM umami_website_event
+					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
+						AND created_at > $1::timestamptz
+						AND created_at < $2::timestamptz`,
+					[start, end]
+				),
+				// Previous period counts for trend comparison
+				client.query(
+					`SELECT 
+						COALESCE(SUM(CASE WHEN event_name = 'contact-page-visit' THEN 1 ELSE 0 END), 0)::int AS page_visits,
+						COALESCE(SUM(CASE WHEN event_name = 'contact-page-form-submit' THEN 1 ELSE 0 END), 0)::int AS form_submissions
+					FROM umami_website_event
+					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
+						AND created_at > $1::timestamptz
+						AND created_at < $2::timestamptz`,
+					[prevStart, prevEnd]
+				),
+				// Recent events for the table
+				client.query(
+					`SELECT 
+						event_name,
+						session_id,
+						created_at,
+						url_path
+					FROM umami_website_event
+					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
+						AND created_at > $1::timestamptz
+						AND created_at < $2::timestamptz
+					ORDER BY created_at DESC
+					LIMIT 1000`,
+					[start, end]
+				)
+			]);
+			
+			const current = currentPeriod[0] || { page_visits: 0, form_submissions: 0 };
+			const prev = previousPeriod[0] || { page_visits: 0, form_submissions: 0 };
+			
+			// Calculate conversion rates
+			const conversionRate = current.page_visits > 0 
+				? (current.form_submissions / current.page_visits) * 100 
+				: 0;
+			const prevConversionRate = prev.page_visits > 0 
+				? (prev.form_submissions / prev.page_visits) * 100 
+				: 0;
+			
+			console.log(`Contact Us: ${current.page_visits} visits, ${current.form_submissions} submissions, ${conversionRate.toFixed(2)}% conversion`);
+			
+			res.json({
+				summary: {
+					page_visits: current.page_visits,
+					form_submissions: current.form_submissions,
+					conversion_rate: conversionRate
+				},
+				prevSummary: {
+					page_visits: prev.page_visits,
+					form_submissions: prev.form_submissions,
+					conversion_rate: prevConversionRate
+				},
+				recentEvents
+			});
+			
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/contact-us:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 // Serve the React app for all other routes (SPA routing) in production
 // This catch-all route must be last - it handles client-side routing
 if (process.env.NODE_ENV === "production") {

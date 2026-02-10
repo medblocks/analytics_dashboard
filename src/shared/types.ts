@@ -124,4 +124,26 @@ export interface UmamiRawData {
   topEvents: UmamiEventRow[]
 }
 
-export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw'
+export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw' | 'contact-us'
+
+// Contact Us Analytics Types
+export interface ContactUsData {
+  summary: {
+    page_visits: number
+    form_submissions: number
+    conversion_rate: number
+  }
+  prevSummary: {
+    page_visits: number
+    form_submissions: number
+    conversion_rate: number
+  }
+  recentEvents: ContactUsEvent[]
+}
+
+export interface ContactUsEvent {
+  event_name: string
+  session_id: string
+  created_at: string
+  url_path: string | null
+}
