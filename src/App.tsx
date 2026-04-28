@@ -2,16 +2,15 @@ import { useState, useMemo } from 'react'
 import './App.css'
 
 // Types
-import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse, UmamiRawData, YouTubeRawRow, LinkedInRawRow, ContactUsData } from './shared/types'
+import type { Totals, TotalUsers, Row, QueryRow, TabType, YTRankingRow, YTRankingApiResponse, UmamiRawData, YouTubeRawRow, YouTubeRawPaidRow, LinkedInRawRow, OtherRow, ContactUsData } from './shared/types'
 
 // Components
 import { DateRangeFilter } from './shared/components/DateRangeFilter'
 import { Sidebar } from './components/Sidebar'
 import { DashboardLayout } from './components/DashboardLayout'
 import { OverviewTab } from './components/OverviewTab'
-import { LinkedInTab } from './components/LinkedInTab'
-import { YouTubeTab } from './components/YouTubeTab'
 import { GoogleTab } from './components/GoogleTab'
+import { OtherTab } from './components/OtherTab'
 import { SearchQueriesTab } from './components/SearchQueriesTab'
 import { YTSearchRankingTab } from './components/YTSearchRankingTab'
 import { BrevoTab } from './components/BrevoTab'
@@ -27,11 +26,10 @@ import { formatDateForParam } from './shared/utils/formatters'
 
 const tabTitles: Record<TabType, string> = {
   overview: 'Dashboard Overview',
-  linkedin: 'LinkedIn Analytics',
   'linkedin-raw': 'LinkedIn Raw Analytics',
-  youtube: 'YouTube Analytics',
   'youtube-raw': 'YouTube Raw Analytics',
   google: 'Google Analytics',
+  other: 'Other / Unattributed',
   'search-queries': 'Search Queries',
   'yt-search-ranking': 'YouTube Search Ranking',
   brevo: 'Brevo Email Marketing',
@@ -53,16 +51,13 @@ function App() {
   const { data: totals, loading: totalsLoading, error: totalsError } = useFetchData<Totals>(`/totals${query}`, [query])
   const { data: userGrowthData } = useFetchData<any[]>('/user-growth', []) // New Endpoint
 
-  const { data: ytData, loading: ytLoading, error: ytError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/youtube${query}`, [query])
-  const { data: liData, loading: liLoading, error: liError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/linkedin${query}`, [query])
   const { data: googleData, loading: googleLoading, error: googleError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/google${query}`, [query])
-  
-  const ytRows = ytData?.rows || []
-  const ytPrevRows = ytData?.prevRows || []
-  const liRows = liData?.rows || []
-  const liPrevRows = liData?.prevRows || []
+  const { data: otherData, loading: otherLoading, error: otherError } = useFetchData<{rows: OtherRow[], prevRows: OtherRow[]}>(`/other${query}`, [query])
+
   const googleRows = googleData?.rows || []
   const googlePrevRows = googleData?.prevRows || []
+  const otherRows = otherData?.rows || []
+  const otherPrevRows = otherData?.prevRows || []
   const { data: searchQueryRows, loading: searchQueriesLoading, error: searchQueriesError } = useFetchData<QueryRow[]>(`/search-queries${query}`, [query])
   const { data: ytRankingApiData, loading: ytRankingLoading, error: ytRankingError } = useFetchData<YTRankingApiResponse[]>(`/youtube-rankings${query}`, [query])
   
@@ -84,15 +79,16 @@ function App() {
   
   // Raw LinkedIn and YouTube data (mapped to directus_content only, no scraping required)
   const { data: liRawData, loading: liRawLoading, error: liRawError } = useFetchData<{rows: LinkedInRawRow[], prevRows: LinkedInRawRow[]}>(`/linkedin-raw${query}`, [query])
-  const { data: ytRawData, loading: ytRawLoading, error: ytRawError } = useFetchData<{rows: YouTubeRawRow[], prevRows: YouTubeRawRow[]}>(`/youtube-raw${query}`, [query])
-  
+  const { data: ytRawData, loading: ytRawLoading, error: ytRawError } = useFetchData<{rows: YouTubeRawRow[], prevRows: YouTubeRawRow[], paidRows: YouTubeRawPaidRow[], prevPaidRows: YouTubeRawPaidRow[]}>(`/youtube-raw${query}`, [query])
+
   const liRawRows = liRawData?.rows || []
   const liRawPrevRows = liRawData?.prevRows || []
   const ytRawRows = ytRawData?.rows || []
   const ytRawPrevRows = ytRawData?.prevRows || []
+  const ytRawPaidRows = ytRawData?.paidRows || []
 
   // Consolidated error handling for Overview
-  const overviewError = totalsError || liError || ytError || googleError || brevoError
+  const overviewError = totalsError || googleError || brevoError
 
   const headerContent = (
     <div className="header-content">
@@ -123,78 +119,58 @@ function App() {
           totalsLoading={totalsLoading}
           totalUsers={totalUsers}
           totalUsersLoading={totalUsersLoading}
-          liRows={liRows || []}
-          liLoading={liLoading}
-          ytRows={ytRows || []}
-          ytLoading={ytLoading}
-          googleRows={googleRows || []}
-          googleLoading={googleLoading}
-          brevoRows={brevoRows || []}
-          brevoLoading={brevoLoading}
           error={overviewError}
           userGrowthData={userGrowthData || undefined}
           prevTotals={totals ? {
             totalUsers: totals.prevTotalUsers ?? 0,
-            linkedinViews: totals.prevLinkedinViews ?? 0,
-            youtubeViews: totals.prevYoutubeViews ?? 0,
-            googleViews: totals.prevGoogleViews ?? 0,
-            other: totals.prevOther ?? 0
+            linkedinConversions: totals.prevLinkedinConversions ?? 0,
+            youtubeConversions: totals.prevYoutubeConversions ?? 0,
+            googleConversions: totals.prevGoogleConversions ?? 0,
+            otherConversions: totals.prevOtherConversions ?? 0,
           } : null}
         />
       )}
 
-      {activeTab === 'linkedin' && (
-        <LinkedInTab 
-          start={start} 
-          end={end} 
-          rows={liRows} 
-          prevRows={liPrevRows}
-          loading={liLoading} 
-          error={liError} 
-        />
-      )}
-
       {activeTab === 'linkedin-raw' && (
-        <LinkedInRawTab 
-          start={start} 
-          end={end} 
-          rows={liRawRows} 
+        <LinkedInRawTab
+          start={start}
+          end={end}
+          rows={liRawRows}
           prevRows={liRawPrevRows}
-          loading={liRawLoading} 
-          error={liRawError} 
-        />
-      )}
-
-      {activeTab === 'youtube' && (
-        <YouTubeTab 
-          start={start} 
-          end={end} 
-          rows={ytRows} 
-          prevRows={ytPrevRows}
-          loading={ytLoading} 
-          error={ytError} 
+          loading={liRawLoading}
+          error={liRawError}
         />
       )}
 
       {activeTab === 'youtube-raw' && (
-        <YouTubeRawTab 
-          start={start} 
-          end={end} 
-          rows={ytRawRows} 
+        <YouTubeRawTab
+          start={start}
+          end={end}
+          rows={ytRawRows}
           prevRows={ytRawPrevRows}
-          loading={ytRawLoading} 
-          error={ytRawError} 
+          paidRows={ytRawPaidRows}
+          loading={ytRawLoading}
+          error={ytRawError}
         />
       )}
 
       {activeTab === 'google' && (
-        <GoogleTab 
-          start={start} 
-          end={end} 
-          rows={googleRows} 
+        <GoogleTab
+          start={start}
+          end={end}
+          rows={googleRows}
           prevRows={googlePrevRows}
-          loading={googleLoading} 
-          error={googleError} 
+          loading={googleLoading}
+          error={googleError}
+        />
+      )}
+
+      {activeTab === 'other' && (
+        <OtherTab
+          rows={otherRows}
+          prevRows={otherPrevRows}
+          loading={otherLoading}
+          error={otherError}
         />
       )}
 

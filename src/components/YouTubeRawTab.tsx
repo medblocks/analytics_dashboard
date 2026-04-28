@@ -1,4 +1,4 @@
-import type { YouTubeRawRow, CalculatedTotals } from '../shared/types'
+import type { YouTubeRawRow, YouTubeRawPaidRow, CalculatedTotals } from '../shared/types'
 import { StatsCard } from '../shared/components/StatsCard'
 import { ErrorCard } from '../shared/components/ErrorCard'
 import { formatPercentage } from '../shared/utils/formatters'
@@ -8,11 +8,12 @@ type YouTubeRawTabProps = {
   end: Date
   rows: YouTubeRawRow[]
   prevRows?: YouTubeRawRow[]
+  paidRows?: YouTubeRawPaidRow[]
   loading: boolean
   error: string | null
 }
 
-function usePerformanceMetrics(rows: YouTubeRawRow[]): CalculatedTotals {
+function rowMetrics<T extends { redirect_count: number; user_converted: number }>(rows: T[]): CalculatedTotals {
   return rows.reduce(
     (acc, row) => ({
       redirects: acc.redirects + (row.redirect_count || 0),
@@ -27,9 +28,10 @@ function formatNumber(num: number | null | undefined): string {
   return num.toLocaleString()
 }
 
-export function YouTubeRawTab({ rows, prevRows = [], loading, error }: YouTubeRawTabProps) {
-  const totals = usePerformanceMetrics(rows)
-  const prevTotals = usePerformanceMetrics(prevRows)
+export function YouTubeRawTab({ rows, prevRows = [], paidRows = [], loading, error }: YouTubeRawTabProps) {
+  const totals = rowMetrics(rows)
+  const prevTotals = rowMetrics(prevRows)
+  const paidTotals = rowMetrics(paidRows)
 
   const getTrend = (current: number, prev: number) => {
     if (prev === 0) {
@@ -62,12 +64,10 @@ export function YouTubeRawTab({ rows, prevRows = [], loading, error }: YouTubeRa
       
       <div className="page-content">
         <div className="raw-tab-notice">
-          <strong>Raw Data:</strong> Shows YouTube traffic mapped to Directus content URLs. 
+          <strong>YouTube Conversions:</strong> signups whose converting session's first
+          pageview was a YouTube-sourced page. Each row keys by (landing page, video ID).
           {videosWithInfo > 0 && (
-            <span> Found <strong>{videosWithInfo}</strong> videos with YouTube API data.</span>
-          )}
-          {videosWithInfo === 0 && rows.length > 0 && (
-            <span> <em>Note: YouTube API data not available. Check API key configuration.</em></span>
+            <span> Resolved YouTube API metadata for <strong>{videosWithInfo}</strong> of <strong>{rows.length}</strong> rows.</span>
           )}
         </div>
         
@@ -187,6 +187,61 @@ export function YouTubeRawTab({ rows, prevRows = [], loading, error }: YouTubeRa
             </table>
           )}
         </div>
+
+        {paidRows.length > 0 && (
+          <div className="page-content" style={{ marginTop: '32px' }}>
+            <h3 className="sectionTitle" style={{ fontSize: '18px', marginBottom: '12px' }}>
+              Paid YT Ads
+            </h3>
+            <div className="raw-tab-notice">
+              <strong>Paid traffic:</strong> Google Ads campaigns running on YouTube
+              (utm_medium=cpc / paid_video). These use numeric Google Ads campaign IDs in
+              utm_campaign — not real video IDs — so they're listed separately to keep
+              organic-video stats clean.
+            </div>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Landing Page</th>
+                    <th>Campaign</th>
+                    <th>Redirects</th>
+                    <th>Conversions</th>
+                    <th>Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paidRows.map((r, idx) => (
+                    <tr key={`paid-${idx}`}>
+                      <td>
+                        <a
+                          href={r.post.startsWith('http') ? r.post : `https://medblocks.com${r.post}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="url-link"
+                          title={r.post}
+                        >
+                          {r.post.length > 60 ? r.post.substring(0, 60) + '...' : r.post}
+                        </a>
+                      </td>
+                      <td>{r.utm_campaign || '-'}</td>
+                      <td>{r.redirect_count}</td>
+                      <td>{r.user_converted}</td>
+                      <td>{r.redirect_count > 0 ? formatPercentage((r.user_converted / r.redirect_count) * 100) : '0%'}</td>
+                    </tr>
+                  ))}
+                  <tr className="totals-row">
+                    <td><strong>Total</strong></td>
+                    <td>-</td>
+                    <td><strong>{paidTotals.redirects}</strong></td>
+                    <td><strong>{paidTotals.conversions}</strong></td>
+                    <td><strong>{paidTotals.redirects > 0 ? formatPercentage((paidTotals.conversions / paidTotals.redirects) * 100) : '0%'}</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </>
   )

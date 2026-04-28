@@ -1,14 +1,14 @@
 export interface Totals {
   totalUsers: number
-  linkedinViews: number
-  youtubeViews: number
-  googleViews: number
-  other: number
+  linkedinConversions: number
+  youtubeConversions: number
+  googleConversions: number
+  otherConversions: number
   prevTotalUsers?: number
-  prevLinkedinViews?: number
-  prevYoutubeViews?: number
-  prevGoogleViews?: number
-  prevOther?: number
+  prevLinkedinConversions?: number
+  prevYoutubeConversions?: number
+  prevGoogleConversions?: number
+  prevOtherConversions?: number
 }
 
 export interface TotalUsers {
@@ -36,6 +36,17 @@ export interface YouTubeRawRow extends Row {
   ytLikeCount: number | null
   ytCommentCount: number | null
   thumbnailUrl: string | null
+}
+
+// Paid YouTube Ads row (utm_medium=cpc/paid_video) for YouTube Raw tab.
+// These come from Google Ads campaigns running on YouTube and use numeric campaign
+// IDs in utm_campaign — not real video IDs. Surfaced separately so they don't
+// pollute organic-video performance.
+export interface YouTubeRawPaidRow {
+  post: string
+  utm_campaign: string | null
+  redirect_count: number
+  user_converted: number
 }
 
 export interface QueryRow {
@@ -124,7 +135,19 @@ export interface UmamiRawData {
   topEvents: UmamiEventRow[]
 }
 
-export type TabType = 'overview' | 'linkedin' | 'youtube' | 'google' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw' | 'contact-us'
+export type TabType = 'overview' | 'google' | 'other' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw' | 'contact-us'
+
+// Row in the Other tab: signups not attributed to LinkedIn/YouTube/Google.
+// sub_source labels the kind (Direct / Brevo / OAuth callback / Bing / etc.).
+export interface OtherRow {
+  post: string
+  sub_source: string
+  user_converted: number
+  referrer_domain: string
+  utm_source: string
+  utm_medium: string
+  utm_campaign: string
+}
 
 // Contact Us Analytics Types
 export interface ContactUsData {

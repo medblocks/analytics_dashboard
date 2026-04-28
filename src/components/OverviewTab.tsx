@@ -1,4 +1,4 @@
-import type { Totals, TotalUsers, Row } from '../shared/types'
+import type { Totals, TotalUsers } from '../shared/types'
 import { PrimaryCard } from '../shared/components/PrimaryCard'
 import { StatsCard } from '../shared/components/StatsCard'
 import { ErrorCard } from '../shared/components/ErrorCard'
@@ -9,14 +9,6 @@ type OverviewTabProps = {
   totalsLoading: boolean
   totalUsers: TotalUsers | null
   totalUsersLoading: boolean
-  liRows: Row[]
-  liLoading: boolean
-  ytRows: Row[]
-  ytLoading: boolean
-  googleRows: Row[]
-  googleLoading: boolean
-  brevoRows: Row[]
-  brevoLoading: boolean
   error: string | null
   userGrowthData?: any[]
   prevTotals?: Totals | null
@@ -49,58 +41,67 @@ export function OverviewTab({
   };
 
   const userTrend = getTrend(totals?.totalUsers, prevTotals?.totalUsers);
-  const liTrend = getTrend(totals?.linkedinViews, prevTotals?.linkedinViews);
-  const ytTrend = getTrend(totals?.youtubeViews, prevTotals?.youtubeViews);
-  const googleTrend = getTrend(totals?.googleViews, prevTotals?.googleViews);
+  const liTrend = getTrend(totals?.linkedinConversions, prevTotals?.linkedinConversions);
+  const ytTrend = getTrend(totals?.youtubeConversions, prevTotals?.youtubeConversions);
+  const googleTrend = getTrend(totals?.googleConversions, prevTotals?.googleConversions);
+  const otherTrend = getTrend(totals?.otherConversions, prevTotals?.otherConversions);
 
   return (
     <>
       {/* Primary Total Users Box */}
       <div style={{ marginBottom: '32px' }}>
-        <PrimaryCard 
-            title="Total Users (All Time)" 
-            value={totalUsers?.totalUsers ?? '—'} 
-            loading={totalUsersLoading} 
+        <PrimaryCard
+            title="Total Users (All Time)"
+            value={totalUsers?.totalUsers ?? '—'}
+            loading={totalUsersLoading}
         />
-        
+
       </div>
 
       {error && <ErrorCard message={error} />}
-      
+
       <div className="page-content">
         <h3 className="sectionTitle" style={{ fontSize: '18px', marginBottom: '20px' }}>Performance Overview</h3>
         <div className="cards">
-          <StatsCard 
-            title="Total Users" 
-            value={totals?.totalUsers ?? '-'} 
+          <StatsCard
+            title="Total Users"
+            value={totals?.totalUsers ?? '-'}
             loading={totalsLoading}
             trend={userTrend?.direction}
             trendValue={userTrend?.value}
             prevValue={prevTotals?.totalUsers}
           />
-          <StatsCard 
-            title="LinkedIn Views" 
-            value={totals?.linkedinViews ?? '-'} 
+          <StatsCard
+            title="LinkedIn Conversions"
+            value={totals?.linkedinConversions ?? '-'}
             loading={totalsLoading}
             trend={liTrend?.direction}
             trendValue={liTrend?.value}
-            prevValue={prevTotals?.linkedinViews}
+            prevValue={prevTotals?.linkedinConversions}
           />
-          <StatsCard 
-            title="YouTube Views" 
-            value={totals?.youtubeViews ?? '-'} 
+          <StatsCard
+            title="YouTube Conversions"
+            value={totals?.youtubeConversions ?? '-'}
             loading={totalsLoading}
             trend={ytTrend?.direction}
             trendValue={ytTrend?.value}
-            prevValue={prevTotals?.youtubeViews}
+            prevValue={prevTotals?.youtubeConversions}
           />
-          <StatsCard 
-            title="Google Views" 
-            value={totals?.googleViews ?? '-'} 
+          <StatsCard
+            title="Google Conversions"
+            value={totals?.googleConversions ?? '-'}
             loading={totalsLoading}
             trend={googleTrend?.direction}
             trendValue={googleTrend?.value}
-            prevValue={prevTotals?.googleViews}
+            prevValue={prevTotals?.googleConversions}
+          />
+          <StatsCard
+            title="Other / Unattributed"
+            value={totals?.otherConversions ?? '-'}
+            loading={totalsLoading}
+            trend={otherTrend?.direction}
+            trendValue={otherTrend?.value}
+            prevValue={prevTotals?.otherConversions}
           />
         </div>
       </div>
