@@ -218,8 +218,12 @@ const SOURCE_CASE_SQL = `
   END
 `;
 
-// Attribution model: signups in date range, classified by their converting session's
-// first pageview. Sum of source counts always equals total signups in the range.
+// Attribution model: signups in date range, classified by FIRST-TOUCH when available,
+// otherwise by their converting session's first pageview.
+// First-touch comes from the SignUp event's umami_event_data (first_utm_source /
+// first_utm_medium / first_utm_campaign / first_referrer_url), which the website writes
+// from its mb_utm_data cookie. A signup is "Direct/other" only when BOTH first-touch and
+// the converting session carry no source. Sum of source counts still equals total signups.
 // Caller composes additional CTEs after these by prefixing this with "WITH" and
 // continuing with ", more_cte AS (...)" before the final SELECT. Binds $1=start, $2=end.
 const ATTRIBUTED_SIGNUPS_CTES = `
@@ -237,7 +241,8 @@ converting_event AS (
   -- they're for existing users logging back in, not new conversions.
   SELECT DISTINCT ON (s.user_id)
     s.user_id,
-    uwe.session_id
+    uwe.session_id,
+    uwe.event_id AS signup_event_id
   FROM signups s
   JOIN umami_event_data ued
     ON ued.data_key = 'user_id'
@@ -265,20 +270,54 @@ session_first_view AS (
     AND uwe.event_type = 1
   ORDER BY uwe.session_id, uwe.created_at ASC
 ),
-attributed_signups AS (
+signup_first_touch AS (
+  -- First-touch attribution carried on the SignUp event itself (written by the website
+  -- from the mb_utm_data cookie). Pivots the relevant event_data keys into columns.
+  SELECT ce.user_id,
+    max(CASE WHEN ed.data_key = 'first_utm_source'   THEN ed.string_value END) AS ft_utm_source,
+    max(CASE WHEN ed.data_key = 'first_utm_medium'   THEN ed.string_value END) AS ft_utm_medium,
+    max(CASE WHEN ed.data_key = 'first_utm_campaign' THEN ed.string_value END) AS ft_utm_campaign,
+    max(CASE WHEN ed.data_key = 'first_referrer_url' THEN ed.string_value END) AS ft_referrer_url
+  FROM converting_event ce
+  JOIN umami_event_data ed
+    ON ed.website_event_id = ce.signup_event_id
+   AND ed.data_key IN ('first_utm_source','first_utm_medium','first_utm_campaign','first_referrer_url')
+  GROUP BY ce.user_id
+),
+signup_source AS (
+  -- Effective source per signup: first-touch preferred, converting-session as fallback.
+  -- first_referrer_url is reduced to its lowercase host: any scheme (http(s)://,
+  -- android-app://, intent://, or none) and www. are stripped, so app/scheme-less
+  -- referrers normalize to the bare host the classifier expects (P2-7).
   SELECT
     s.user_id,
     sfv.url_path  AS landing_page,
     sfv.url_query AS landing_query,
-    sfv.utm_source,
-    sfv.utm_medium,
-    sfv.utm_campaign,
+    COALESCE(NULLIF(ft.ft_utm_source,''),   sfv.utm_source)   AS utm_source,
+    COALESCE(NULLIF(ft.ft_utm_medium,''),   sfv.utm_medium)   AS utm_medium,
+    COALESCE(NULLIF(ft.ft_utm_campaign,''), sfv.utm_campaign) AS utm_campaign,
     sfv.utm_term,
-    sfv.referrer_domain,
-    COALESCE(${SOURCE_CASE_SQL}, 'other') AS source
+    COALESCE(
+      NULLIF(lower(regexp_replace(ft.ft_referrer_url, '^([a-z-]+://)?(www\\.)?([^/?#]+).*$', '\\3')), ''),
+      sfv.referrer_domain
+    ) AS referrer_domain
   FROM signups s
   LEFT JOIN converting_event ce ON ce.user_id = s.user_id
   LEFT JOIN session_first_view sfv ON sfv.session_id = ce.session_id
+  LEFT JOIN signup_first_touch ft ON ft.user_id = s.user_id
+),
+attributed_signups AS (
+  SELECT
+    user_id,
+    landing_page,
+    landing_query,
+    utm_source,
+    utm_medium,
+    utm_campaign,
+    utm_term,
+    referrer_domain,
+    COALESCE(${SOURCE_CASE_SQL}, 'other') AS source
+  FROM signup_source
 )`;
 
 // Per-session all-time first-pageview classification, scoped to sessions active in the range.
