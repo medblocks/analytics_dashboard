@@ -242,7 +242,8 @@ converting_event AS (
   SELECT DISTINCT ON (s.user_id)
     s.user_id,
     uwe.session_id,
-    uwe.event_id AS signup_event_id
+    uwe.event_id AS signup_event_id,
+    uwe.created_at AS signup_at
   FROM signups s
   JOIN umami_event_data ued
     ON ued.data_key = 'user_id'
@@ -256,6 +257,8 @@ converting_event AS (
   ORDER BY s.user_id, abs(extract(epoch FROM (uwe.created_at - s.date_created)))
 ),
 session_first_view AS (
+  -- The converting session's first pageview, used for the landing_page label and as the
+  -- last-resort source fallback.
   SELECT DISTINCT ON (uwe.session_id)
     uwe.session_id,
     uwe.url_path,
@@ -268,6 +271,34 @@ session_first_view AS (
   FROM umami_website_event uwe
   WHERE uwe.session_id IN (SELECT session_id FROM converting_event)
     AND uwe.event_type = 1
+  ORDER BY uwe.session_id, uwe.created_at ASC
+),
+session_any_source AS (
+  -- The real acquisition source frequently sits on a LATER pageview, or on a custom
+  -- (event_type=2) event, of the same month-stable Umami session, NOT on the earliest
+  -- pageview. Scan ALL events of the converting session at or before the signup and take the
+  -- EARLIEST one carrying a real source: a utm_source, or a referrer that is not an
+  -- auth-callback / internal domain. This recovers signups that the first-pageview model
+  -- mislabels "Direct" even though the source is already in the warehouse.
+  SELECT DISTINCT ON (uwe.session_id)
+    uwe.session_id,
+    uwe.utm_source,
+    uwe.utm_medium,
+    uwe.utm_campaign,
+    uwe.referrer_domain
+  FROM umami_website_event uwe
+  JOIN converting_event ce ON ce.session_id = uwe.session_id
+  WHERE uwe.created_at <= ce.signup_at
+    AND (
+      coalesce(uwe.utm_source, '') <> ''
+      OR (
+        coalesce(uwe.referrer_domain, '') <> ''
+        AND uwe.referrer_domain NOT IN (
+          'accounts.google.com', 'login.microsoftonline.com', 'login.live.com',
+          'appleid.apple.com', 'github.com', 'medblocks.com'
+        )
+      )
+    )
   ORDER BY uwe.session_id, uwe.created_at ASC
 ),
 signup_first_touch AS (
@@ -285,25 +316,31 @@ signup_first_touch AS (
   GROUP BY ce.user_id
 ),
 signup_source AS (
-  -- Effective source per signup: first-touch preferred, converting-session as fallback.
-  -- first_referrer_url is reduced to its lowercase host: any scheme (http(s)://,
-  -- android-app://, intent://, or none) and www. are stripped, so app/scheme-less
-  -- referrers normalize to the bare host the classifier expects (P2-7).
+  -- Effective source per signup, in priority order:
+  --   1. first-touch carried on the SignUp event (mb_utm_data cookie; forward-looking)
+  --   2. any source-bearing event of the converting session at/before signup (session_any_source);
+  --      recovers the real source that sits on a later pageview or a custom event, which the
+  --      first-pageview model misses and labels "Direct"
+  --   3. the converting session's first pageview (original fallback)
+  -- first_referrer_url is reduced to its lowercase host: any scheme (http(s)://, android-app://,
+  -- intent://, or none) and www. are stripped, so app/scheme-less referrers normalize (P2-7).
   SELECT
     s.user_id,
     sfv.url_path  AS landing_page,
     sfv.url_query AS landing_query,
-    COALESCE(NULLIF(ft.ft_utm_source,''),   sfv.utm_source)   AS utm_source,
-    COALESCE(NULLIF(ft.ft_utm_medium,''),   sfv.utm_medium)   AS utm_medium,
-    COALESCE(NULLIF(ft.ft_utm_campaign,''), sfv.utm_campaign) AS utm_campaign,
+    COALESCE(NULLIF(ft.ft_utm_source,''),   sas.utm_source,   sfv.utm_source)   AS utm_source,
+    COALESCE(NULLIF(ft.ft_utm_medium,''),   sas.utm_medium,   sfv.utm_medium)   AS utm_medium,
+    COALESCE(NULLIF(ft.ft_utm_campaign,''), sas.utm_campaign, sfv.utm_campaign) AS utm_campaign,
     sfv.utm_term,
     COALESCE(
       NULLIF(lower(regexp_replace(ft.ft_referrer_url, '^([a-z-]+://)?(www\\.)?([^/?#]+).*$', '\\3')), ''),
+      sas.referrer_domain,
       sfv.referrer_domain
     ) AS referrer_domain
   FROM signups s
   LEFT JOIN converting_event ce ON ce.user_id = s.user_id
   LEFT JOIN session_first_view sfv ON sfv.session_id = ce.session_id
+  LEFT JOIN session_any_source sas ON sas.session_id = ce.session_id
   LEFT JOIN signup_first_touch ft ON ft.user_id = s.user_id
 ),
 attributed_signups AS (
