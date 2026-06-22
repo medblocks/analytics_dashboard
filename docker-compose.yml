@@ -1,9 +1,8 @@
 services:
   analytics_dashboard:
-    image: node:20-alpine
-    working_dir: /app
-    ports:
-      - "4000"
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - NODE_ENV=production
       - PORT=4000
@@ -12,8 +11,6 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
       - DB_PORT=${DB_PORT}
-    volumes:
-      - .:/app
-      - /app/node_modules
-    command: sh -c "npm install --include=dev && npm run build && NODE_ENV=production node server/index.js"
+    ports:
+      - "4000"
     restart: unless-stopped
