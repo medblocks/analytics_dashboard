@@ -199,18 +199,25 @@ function getPreviousPeriod(start, end) {
 
 // Source-classification rules applied to columns named utm_source / utm_medium / referrer_domain.
 // Reused inside multiple CTEs so all attribution decisions stay consistent.
+//   Google Ads: utm_source=google (paid: cpc / demand_gen). Checked BEFORE organic so a paid
+//           click is 'google_ads' even when its referrer is google.com.
 //   Google: organic search only (google.com + country variants, search.google.com,
-//           Android quick-search). Excludes accounts.google.com (OAuth callback
-//           that fires on every Google-OAuth signup), mail/gemini/notebooklm/etc.
-//   YouTube: utm_source=youtube OR YouTube domains.
-//   LinkedIn: utm_source=linkedin (excluding utm_medium=bio) OR LinkedIn domains.
+//           Android quick-search). The accounts.google.com OAuth callback (no utm_source)
+//           stays 'other'; mail/gemini/notebooklm/etc are excluded.
+//   YouTube: utm_source=youtube OR utm_medium=youtube OR YouTube domains.
+//   LinkedIn: utm_source=linkedin (excluding utm_medium=bio) OR utm_medium=linkedin OR LinkedIn domains.
+//   utm_medium catches links mis-tagged utm_source=description (a video-description link),
+//   where utm_medium carries the real channel and utm_campaign the video id.
 const SOURCE_CASE_SQL = `
   CASE
     WHEN lower(utm_source) = 'linkedin'
       AND coalesce(lower(utm_medium),'') <> 'bio' THEN 'linkedin'
     WHEN referrer_domain IN ('linkedin.com','com.linkedin.android','lnkd.in') THEN 'linkedin'
+    WHEN lower(utm_medium) = 'linkedin' THEN 'linkedin'
     WHEN lower(utm_source) = 'youtube' THEN 'youtube'
     WHEN referrer_domain IN ('youtube.com','m.youtube.com','com.google.android.youtube','youtu.be') THEN 'youtube'
+    WHEN lower(utm_medium) = 'youtube' THEN 'youtube'
+    WHEN lower(utm_source) = 'google' THEN 'google_ads'
     WHEN referrer_domain ~* '^(www\\.)?google\\.[a-z.]+$'
       OR referrer_domain = 'search.google.com'
       OR referrer_domain = 'com.google.android.googlequicksearchbox' THEN 'google'
@@ -357,12 +364,15 @@ attributed_signups AS (
   FROM signup_source
 )`;
 
-// Per-session all-time first-pageview classification, scoped to sessions active in the range.
-// "Active" = had ANY umami event during the range. We classify by the session's TRUE first
-// pageview (which may predate the range — sessions linger across days), so that the same
-// session has the same source/landing_page in attributed_signups and in classified_sessions.
-// This guarantees every converted session shows up in source_redirects, so conversion rates
-// are well-defined per landing page. Composes after ATTRIBUTED_SIGNUPS_CTES via comma.
+// Per-session classification, scoped to sessions active in the range.
+// "Active" = had ANY umami event during the range. The landing page (url_path) comes from the
+// session's TRUE first pageview (which may predate the range, since sessions linger across days),
+// but the SOURCE is resolved the same way as attributed_signups: the earliest source-bearing
+// event of the session (session_range_any_source), falling back to the first pageview. This keeps
+// redirect classification consistent with conversion attribution, so a session whose real source
+// sits on a later or custom event is classified by that source here too (not by its first, often
+// "Direct", pageview), and every converted session shows up in source_redirects.
+// Composes after ATTRIBUTED_SIGNUPS_CTES via comma.
 const RANGE_CLASSIFIED_SESSIONS_CTES = `
 range_active_sessions AS (
   SELECT DISTINCT session_id
@@ -385,6 +395,45 @@ session_all_time_first_view AS (
     AND uwe.event_type = 1
   ORDER BY uwe.session_id, uwe.created_at ASC
 ),
+session_range_any_source AS (
+  -- The earliest source-bearing event of each active session (any event type). Mirrors
+  -- session_any_source but spans ALL range-active sessions, not just converting ones. Skips
+  -- sourceless events and auth-callback / internal referrers.
+  SELECT DISTINCT ON (uwe.session_id)
+    uwe.session_id,
+    uwe.utm_source,
+    uwe.utm_medium,
+    uwe.utm_campaign,
+    uwe.referrer_domain
+  FROM umami_website_event uwe
+  WHERE uwe.session_id IN (SELECT session_id FROM range_active_sessions)
+    AND (
+      coalesce(uwe.utm_source, '') <> ''
+      OR (
+        coalesce(uwe.referrer_domain, '') <> ''
+        AND uwe.referrer_domain NOT IN (
+          'accounts.google.com', 'login.microsoftonline.com', 'login.live.com',
+          'appleid.apple.com', 'github.com', 'medblocks.com'
+        )
+      )
+    )
+  ORDER BY uwe.session_id, uwe.created_at ASC
+),
+session_range_resolved AS (
+  -- Source columns resolved to (earliest source-bearing event, else first pageview); landing
+  -- fields (url_path/url_query/utm_term) stay from the first pageview.
+  SELECT
+    fv.session_id,
+    fv.url_path,
+    fv.url_query,
+    fv.utm_term,
+    COALESCE(NULLIF(sas.utm_source,''),      fv.utm_source)      AS utm_source,
+    COALESCE(NULLIF(sas.utm_medium,''),      fv.utm_medium)      AS utm_medium,
+    COALESCE(NULLIF(sas.utm_campaign,''),    fv.utm_campaign)    AS utm_campaign,
+    COALESCE(NULLIF(sas.referrer_domain,''), fv.referrer_domain) AS referrer_domain
+  FROM session_all_time_first_view fv
+  LEFT JOIN session_range_any_source sas ON sas.session_id = fv.session_id
+),
 classified_sessions AS (
   SELECT
     session_id,
@@ -395,7 +444,7 @@ classified_sessions AS (
     utm_campaign,
     utm_term,
     ${SOURCE_CASE_SQL} AS source
-  FROM session_all_time_first_view
+  FROM session_range_resolved
 )`;
 
 // The compact form used by /api/totals — only the attributed_signups CTE.
@@ -572,6 +621,7 @@ SELECT
   (count(*) FILTER (WHERE source = 'linkedin'))::int AS linkedin_conversions,
   (count(*) FILTER (WHERE source = 'youtube'))::int AS youtube_conversions,
   (count(*) FILTER (WHERE source = 'google'))::int  AS google_conversions,
+  (count(*) FILTER (WHERE source = 'google_ads'))::int AS google_ads_conversions,
   (count(*) FILTER (WHERE source = 'other'))::int   AS other_conversions
 FROM attributed_signups`;
 
@@ -586,12 +636,14 @@ FROM attributed_signups`;
 			const linkedinConversions = cur[0]?.linkedin_conversions ?? 0;
 			const youtubeConversions = cur[0]?.youtube_conversions ?? 0;
 			const googleConversions = cur[0]?.google_conversions ?? 0;
+			const googleAdsConversions = cur[0]?.google_ads_conversions ?? 0;
 			const otherConversions = cur[0]?.other_conversions ?? 0;
 
 			const prevTotalUsers = prev[0]?.total_users ?? 0;
 			const prevLinkedinConversions = prev[0]?.linkedin_conversions ?? 0;
 			const prevYoutubeConversions = prev[0]?.youtube_conversions ?? 0;
 			const prevGoogleConversions = prev[0]?.google_conversions ?? 0;
+			const prevGoogleAdsConversions = prev[0]?.google_ads_conversions ?? 0;
 			const prevOtherConversions = prev[0]?.other_conversions ?? 0;
 
 			res.json({
@@ -599,11 +651,13 @@ FROM attributed_signups`;
 				linkedinConversions,
 				youtubeConversions,
 				googleConversions,
+				googleAdsConversions,
 				otherConversions,
 				prevTotalUsers,
 				prevLinkedinConversions,
 				prevYoutubeConversions,
 				prevGoogleConversions,
+				prevGoogleAdsConversions,
 				prevOtherConversions,
 			});
 		} finally {
@@ -629,10 +683,13 @@ source_redirects AS (
   GROUP BY url_path
 ),
 source_conversions AS (
-  SELECT landing_page AS url_path, count(*)::int AS user_converted
+  -- Conversions come straight from attributed_signups (same source-of-truth as the Overview).
+  -- Page-less signups (no entry pageview) fold into one '(no entry page)' bucket so the tab
+  -- total ties out exactly to the Overview count for this source.
+  SELECT COALESCE(landing_page, '(no entry page)') AS url_path, count(*)::int AS user_converted
   FROM attributed_signups
-  WHERE source = '${source}' AND landing_page IS NOT NULL
-  GROUP BY landing_page
+  WHERE source = '${source}'
+  GROUP BY 1
 )${includeQueries ? `,
 queries_by_path AS (
   SELECT
@@ -654,13 +711,13 @@ top_queries_by_path AS (
   GROUP BY url_path
 )` : ''}
 SELECT
-  r.url_path AS post,
-  r.redirect_count,
+  COALESCE(r.url_path, c.url_path) AS post,
+  COALESCE(r.redirect_count, 0)::int AS redirect_count,
   COALESCE(c.user_converted, 0)::int AS user_converted${includeQueries ? `,
   COALESCE(array_to_json(q.queries), '[]'::json) AS queries` : ''}
 FROM source_redirects r
-LEFT JOIN source_conversions c ON c.url_path = r.url_path${includeQueries ? `
-LEFT JOIN top_queries_by_path q ON q.url_path = r.url_path` : ''}
+FULL OUTER JOIN source_conversions c ON c.url_path = r.url_path${includeQueries ? `
+LEFT JOIN top_queries_by_path q ON q.url_path = COALESCE(r.url_path, c.url_path)` : ''}
 ORDER BY user_converted DESC, redirect_count DESC`;
 }
 
@@ -685,6 +742,78 @@ app.get("/api/google", async (req, res) => {
 	}
 });
 
+// Google Ads — landing-page rollup of paid Google signups (utm_source=google, cpc/demand_gen).
+// Separate from /api/google (organic search). No organic search-query join here, paid clicks
+// are not organic queries; the campaign lives in utm_campaign instead.
+app.get("/api/google-ads", async (req, res) => {
+	try {
+		const { start, end } = asRange(req);
+		const { prevStart, prevEnd } = getPreviousPeriod(start, end);
+		const sql = buildSourceLandingPageQuery('google_ads');
+		const client = await pool.connect();
+		try {
+			const [{ rows }, { rows: prevRows }] = await Promise.all([
+				client.query(sql, [start, end]),
+				client.query(sql, [prevStart, prevEnd]),
+			]);
+			res.json({ rows, prevRows });
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/google-ads:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
+// Per-source signup growth: daily conversions over the last 30 days (bars) + the ALL-TIME
+// cumulative total of that channel up to each date (the green line), matching the Overview chart.
+// Same shape as /api/user-growth (date / daily_count / cumulative_count) so it reuses the chart.
+app.get("/api/source-growth", async (req, res) => {
+	try {
+		const source = String(req.query.source || '');
+		if (!['linkedin', 'youtube', 'google', 'google_ads'].includes(source)) {
+			return res.status(400).json({ error: "source must be one of linkedin, youtube, google, google_ads" });
+		}
+		const now = new Date();
+		const end = now.toISOString();
+		const windowStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+		const epoch = '2000-01-01';
+		// $1=epoch, $2=now -> attributed_signups classifies ALL signups (needed for the all-time
+		// cumulative). $3=source, $4=windowStart -> the 30-day day axis for the bars.
+		const growthQuery = `WITH ${ATTRIBUTED_SIGNUPS_CTES},
+channel AS (
+  SELECT date_trunc('day', s.date_created) AS d
+  FROM attributed_signups asg
+  JOIN signups s ON s.user_id = asg.user_id
+  WHERE asg.source = $3
+),
+day_series AS (
+  SELECT generate_series(
+    date_trunc('day', $4::timestamptz),
+    date_trunc('day', $2::timestamptz),
+    '1 day'::interval
+  ) AS d
+)
+SELECT
+  ds.d AS date,
+  (SELECT count(*) FROM channel c WHERE c.d =  ds.d)::int AS daily_count,
+  (SELECT count(*) FROM channel c WHERE c.d <= ds.d)::int AS cumulative_count
+FROM day_series ds
+ORDER BY ds.d ASC`;
+		const client = await pool.connect();
+		try {
+			const { rows } = await client.query(growthQuery, [epoch, end, source, windowStart]);
+			res.json(rows);
+		} finally {
+			client.release();
+		}
+	} catch (e) {
+		console.error("Error in /api/source-growth:", e);
+		res.status(500).json({ error: e.message || "Internal server error" });
+	}
+});
+
 // Other-source signups — drill-down for everything not LinkedIn/YouTube/Google.
 // Each row = (landing_page, sub_source) where sub_source labels which kind of "other"
 // (direct, Brevo email, Google-OAuth callback, Bing/DuckDuckGo, AI chat, internal, etc.).
@@ -698,10 +827,13 @@ app.get("/api/other", async (req, res) => {
   CASE
     WHEN asg.landing_page IS NULL THEN 'No entry pageview'
     WHEN lower(asg.utm_source) = 'brevo'
-      OR asg.referrer_domain ILIKE '%sendibm%' THEN 'Brevo / Email'
+      OR asg.referrer_domain ILIKE '%sendibm%'
+      OR asg.referrer_domain ILIKE '%brevo%' THEN 'Brevo / Email'
     WHEN asg.referrer_domain = 'accounts.google.com' THEN 'Google OAuth callback'
-    WHEN asg.referrer_domain IN ('bing.com','duckduckgo.com','search.brave.com','search.yahoo.com') THEN 'Other search engine'
-    WHEN asg.referrer_domain IN ('chatgpt.com','perplexity.ai','claude.ai','gemini.google.com','notebooklm.google.com') THEN 'AI chat'
+    WHEN asg.referrer_domain IN ('bing.com','duckduckgo.com','search.brave.com','search.yahoo.com','ecosia.org')
+      OR asg.referrer_domain ILIKE '%.search.yahoo.com' THEN 'Other search engine'
+    WHEN asg.referrer_domain IN ('chatgpt.com','perplexity.ai','claude.ai','gemini.google.com','notebooklm.google.com','copilot.microsoft.com')
+      OR lower(asg.utm_source) IN ('chatgpt.com','chatgpt','perplexity','perplexity.ai','claude.ai','claude','gemini','copilot') THEN 'AI chat'
     WHEN asg.referrer_domain = 'medblocks.com' THEN 'Internal'
     WHEN coalesce(asg.referrer_domain,'') = '' AND coalesce(asg.utm_source,'') = '' THEN 'Direct'
     ELSE COALESCE(NULLIF(asg.referrer_domain,''), NULLIF(asg.utm_source,''), 'Other')
@@ -1061,8 +1193,7 @@ ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`
 // LinkedIn Raw — landing-page rollup of LinkedIn-attributed signups.
 // Each row = (landing_page) for sessions classified as `linkedin`. Schema mirrors
 // /api/google's response (post, redirect_count, user_converted) so the existing
-// LinkedInRawTab continues to render. content_id is no longer included; with
-// last-touch landing-page attribution it is no longer the row key.
+// LinkedInRawTab continues to render. content_id is no longer included.
 app.get("/api/linkedin-raw", async (req, res) => {
 	try {
 		const { start, end } = asRange(req);
@@ -1145,7 +1276,7 @@ yt_redirects AS (
 ),
 yt_conversions AS (
   SELECT
-    asg.landing_page AS url_path,
+    COALESCE(asg.landing_page, '(no entry page)') AS url_path,
     COALESCE(
       CASE WHEN substring(asg.utm_campaign, '^([A-Za-z0-9_-]{11})(?:[^A-Za-z0-9_-]|$)') !~ '^[0-9]+$'
            THEN substring(asg.utm_campaign, '^([A-Za-z0-9_-]{11})(?:[^A-Za-z0-9_-]|$)') END,
@@ -1157,7 +1288,6 @@ yt_conversions AS (
     count(*)::int AS user_converted
   FROM attributed_signups asg
   WHERE asg.source = 'youtube'
-    AND asg.landing_page IS NOT NULL
     AND coalesce(lower(asg.utm_medium),'') NOT IN ('cpc','paid_video')
   GROUP BY 1, 2
 ),
@@ -1172,35 +1302,34 @@ yt_paid_redirects AS (
 ),
 yt_paid_conversions AS (
   SELECT
-    asg.landing_page AS url_path,
+    COALESCE(asg.landing_page, '(no entry page)') AS url_path,
     asg.utm_campaign,
     count(*)::int AS user_converted
   FROM attributed_signups asg
   WHERE asg.source = 'youtube'
-    AND asg.landing_page IS NOT NULL
     AND coalesce(lower(asg.utm_medium),'') IN ('cpc','paid_video')
   GROUP BY 1, 2
 )
 SELECT
   'organic'::text AS bucket,
-  r.url_path AS post,
-  r.video_id,
-  r.redirect_count,
+  COALESCE(r.url_path, c.url_path) AS post,
+  COALESCE(r.video_id, c.video_id) AS video_id,
+  COALESCE(r.redirect_count, 0)::int AS redirect_count,
   COALESCE(c.user_converted, 0)::int AS user_converted,
   NULL::text AS utm_campaign
 FROM yt_redirects r
-LEFT JOIN yt_conversions c
+FULL OUTER JOIN yt_conversions c
   ON c.url_path = r.url_path AND c.video_id IS NOT DISTINCT FROM r.video_id
 UNION ALL
 SELECT
   'paid'::text AS bucket,
-  r.url_path AS post,
+  COALESCE(r.url_path, c.url_path) AS post,
   NULL::text AS video_id,
-  r.redirect_count,
+  COALESCE(r.redirect_count, 0)::int AS redirect_count,
   COALESCE(c.user_converted, 0)::int AS user_converted,
-  r.utm_campaign
+  COALESCE(r.utm_campaign, c.utm_campaign) AS utm_campaign
 FROM yt_paid_redirects r
-LEFT JOIN yt_paid_conversions c
+FULL OUTER JOIN yt_paid_conversions c
   ON c.url_path = r.url_path AND c.utm_campaign IS NOT DISTINCT FROM r.utm_campaign
 ORDER BY user_converted DESC, redirect_count DESC`;
 

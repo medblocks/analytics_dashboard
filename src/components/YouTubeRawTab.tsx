@@ -2,6 +2,7 @@ import type { YouTubeRawRow, YouTubeRawPaidRow, CalculatedTotals } from '../shar
 import { StatsCard } from '../shared/components/StatsCard'
 import { ErrorCard } from '../shared/components/ErrorCard'
 import { formatPercentage } from '../shared/utils/formatters'
+import { UserGrowthChart } from './UserGrowthChart'
 
 type YouTubeRawTabProps = {
   start: Date
@@ -11,6 +12,8 @@ type YouTubeRawTabProps = {
   paidRows?: YouTubeRawPaidRow[]
   loading: boolean
   error: string | null
+  growthData?: any[]
+  growthLoading?: boolean
 }
 
 function rowMetrics<T extends { redirect_count: number; user_converted: number }>(rows: T[]): CalculatedTotals {
@@ -28,7 +31,7 @@ function formatNumber(num: number | null | undefined): string {
   return num.toLocaleString()
 }
 
-export function YouTubeRawTab({ rows, prevRows = [], paidRows = [], loading, error }: YouTubeRawTabProps) {
+export function YouTubeRawTab({ rows, prevRows = [], paidRows = [], loading, error, growthData, growthLoading }: YouTubeRawTabProps) {
   const totals = rowMetrics(rows)
   const prevTotals = rowMetrics(prevRows)
   const paidTotals = rowMetrics(paidRows)
@@ -106,6 +109,14 @@ export function YouTubeRawTab({ rows, prevRows = [], paidRows = [], loading, err
           />
         </div>
         
+        <UserGrowthChart
+          data={growthData ?? []}
+          loading={growthLoading}
+          title="YouTube Conversions (Last 30 Days)"
+          cumulativeLabel="Total Conversions"
+          dailyLabel="Daily Conversions"
+        />
+
         {/* Custom table with YouTube info */}
         <div className="table-container">
           {loading ? (

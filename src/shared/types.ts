@@ -3,11 +3,13 @@ export interface Totals {
   linkedinConversions: number
   youtubeConversions: number
   googleConversions: number
+  googleAdsConversions: number
   otherConversions: number
   prevTotalUsers?: number
   prevLinkedinConversions?: number
   prevYoutubeConversions?: number
   prevGoogleConversions?: number
+  prevGoogleAdsConversions?: number
   prevOtherConversions?: number
 }
 
@@ -135,7 +137,7 @@ export interface UmamiRawData {
   topEvents: UmamiEventRow[]
 }
 
-export type TabType = 'overview' | 'google' | 'other' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw' | 'contact-us'
+export type TabType = 'overview' | 'google' | 'google-ads' | 'other' | 'brevo' | 'search-queries' | 'yt-search-ranking' | 'raw-umami' | 'linkedin-raw' | 'youtube-raw' | 'contact-us'
 
 // Row in the Other tab: signups not attributed to LinkedIn/YouTube/Google.
 // sub_source labels the kind (Direct / Brevo / OAuth callback / Bing / etc.).

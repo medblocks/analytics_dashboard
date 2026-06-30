@@ -44,6 +44,7 @@ export function OverviewTab({
   const liTrend = getTrend(totals?.linkedinConversions, prevTotals?.linkedinConversions);
   const ytTrend = getTrend(totals?.youtubeConversions, prevTotals?.youtubeConversions);
   const googleTrend = getTrend(totals?.googleConversions, prevTotals?.googleConversions);
+  const googleAdsTrend = getTrend(totals?.googleAdsConversions, prevTotals?.googleAdsConversions);
   const otherTrend = getTrend(totals?.otherConversions, prevTotals?.otherConversions);
 
   return (
@@ -94,6 +95,14 @@ export function OverviewTab({
             trend={googleTrend?.direction}
             trendValue={googleTrend?.value}
             prevValue={prevTotals?.googleConversions}
+          />
+          <StatsCard
+            title="Google Ads Conversions"
+            value={totals?.googleAdsConversions ?? '-'}
+            loading={totalsLoading}
+            trend={googleAdsTrend?.direction}
+            trendValue={googleAdsTrend?.value}
+            prevValue={prevTotals?.googleAdsConversions}
           />
           <StatsCard
             title="Other / Unattributed"

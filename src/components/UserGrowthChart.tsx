@@ -20,9 +20,18 @@ type ChartData = {
 type UserGrowthChartProps = {
   data: ChartData[];
   loading?: boolean;
+  title?: string;
+  cumulativeLabel?: string;
+  dailyLabel?: string;
 };
 
-export function UserGrowthChart({ data, loading }: UserGrowthChartProps) {
+export function UserGrowthChart({
+  data,
+  loading,
+  title = 'User Growth (Last 30 Days)',
+  cumulativeLabel = 'Total Users',
+  dailyLabel = 'Daily New Users',
+}: UserGrowthChartProps) {
   const [viewMode, setViewMode] = useState<'daily' | 'cumulative' | 'both'>('both');
   
   const chartData = useMemo(() => {
@@ -58,7 +67,7 @@ export function UserGrowthChart({ data, loading }: UserGrowthChartProps) {
   return (
     <div className="chart-wrapper" style={{ marginTop: '24px', padding: '24px', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h4 style={{ margin: 0, color: '#1a202c', fontSize: '16px', fontWeight: 600 }}>User Growth (Last 30 Days)</h4>
+        <h4 style={{ margin: 0, color: '#1a202c', fontSize: '16px', fontWeight: 600 }}>{title}</h4>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             onClick={() => setViewMode('daily')}
@@ -143,7 +152,7 @@ export function UserGrowthChart({ data, loading }: UserGrowthChartProps) {
               tick={{ fill: '#16a34a', fontSize: 12 }}
               allowDecimals={false}
               label={{ 
-                value: 'Total Users', 
+                value: cumulativeLabel,
                 angle: -90, 
                 position: 'insideLeft',
                 offset: 10,
@@ -162,7 +171,7 @@ export function UserGrowthChart({ data, loading }: UserGrowthChartProps) {
               tick={{ fill: '#2463eb', fontSize: 12 }}
               allowDecimals={false}
               label={{ 
-                value: 'Daily New Users', 
+                value: dailyLabel,
                 angle: 90, 
                 position: 'insideRight',
                 offset: 10,
@@ -182,15 +191,15 @@ export function UserGrowthChart({ data, loading }: UserGrowthChartProps) {
               }}
               cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '4 4' }}
               formatter={(value: number, name: string) => {
-                const label = name === 'daily_count' ? 'Daily New Users' : 'Total Users';
+                const label = name === 'daily_count' ? dailyLabel : cumulativeLabel;
                 return [value, label];
               }}
             />
             <Legend 
               wrapperStyle={{ paddingTop: '20px' }}
               formatter={(value) => {
-                if (value === 'daily_count') return 'Daily New Users';
-                if (value === 'cumulative_count') return 'Total Users';
+                if (value === 'daily_count') return dailyLabel;
+                if (value === 'cumulative_count') return cumulativeLabel;
                 return value;
               }}
             />

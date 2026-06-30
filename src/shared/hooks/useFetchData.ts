@@ -29,7 +29,8 @@ export function useFetchData<T>(path: string, dependencies: any[] = []): UseFetc
 
   useEffect(() => {
     let mounted = true
-    
+    if (!path) { setLoading(false); return () => { mounted = false } }
+
     const run = async () => {
         setLoading(true)
         setError(null)
