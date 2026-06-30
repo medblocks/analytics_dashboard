@@ -4,7 +4,7 @@ The **read half** of the Medblocks analytics stack: an Express API over Postgres
 React/Vite dashboard that visualizes the funnels. It reads the data and SQL functions produced
 by [`analytics_script_2`](../analytics_script_2).
 
-> **Big picture:** see [`../ANALYTICS_MASTER_FLOW.md`](../ANALYTICS_MASTER_FLOW.md) for how this
+> **Big picture:** see [`ANALYTICS_MASTER_FLOW.md`](ANALYTICS_MASTER_FLOW.md) for how this
 > repo and the scraper fit together.
 
 This repo **only reads** from Postgres; the scraper **only writes**. Postgres is the contract.
@@ -80,7 +80,7 @@ single `(no entry page)` row.
 > The `/api/brevo` email funnel still matches the landing URL to the campaign `full_link`
 > byte-for-byte (in the scraper's `f_brevo_funnel`), so it can drop clicks when query params
 > differ. The raw `/api/umami-raw` endpoint never loses events. See
-> [`../ANALYTICS_MASTER_FLOW.md`](../ANALYTICS_MASTER_FLOW.md).
+> [`ANALYTICS_MASTER_FLOW.md`](ANALYTICS_MASTER_FLOW.md).
 
 ---
 
@@ -97,7 +97,7 @@ npm start              # runs Vite UI + Express API concurrently
 > `DB_*` must point at the **`analytics` warehouse** (`db=analytics`, port `5432`) — the *same*
 > database the scraper writes to. This repo never connects to the upstream `umami` source DB;
 > that's the scraper's job. See
-> [`../ANALYTICS_MASTER_FLOW.md`](../ANALYTICS_MASTER_FLOW.md#0-two-databases-one-warehouse-read-this-first).
+> [`ANALYTICS_MASTER_FLOW.md`](ANALYTICS_MASTER_FLOW.md#0-two-databases-one-warehouse-read-this-first).
 
 | Var | Purpose |
 |-----|---------|
