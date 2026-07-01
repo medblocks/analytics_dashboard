@@ -8,7 +8,8 @@ import {
   Trophy,
   Database,
   Phone,
-  HelpCircle
+  HelpCircle,
+  Megaphone
 } from 'lucide-react';
 import type { TabType } from '../shared/types';
 
@@ -23,6 +24,7 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
     { id: 'linkedin-raw', label: 'LinkedIn Raw', icon: Linkedin },
     { id: 'youtube-raw', label: 'YouTube Raw', icon: Youtube },
     { id: 'google', label: 'Google', icon: Chrome },
+    { id: 'google-ads', label: 'Google Ads', icon: Megaphone },
     { id: 'other', label: 'Other', icon: HelpCircle },
     { id: 'search-queries', label: 'Search Queries', icon: Search },
     { id: 'yt-search-ranking', label: 'YT Rankings', icon: Trophy },

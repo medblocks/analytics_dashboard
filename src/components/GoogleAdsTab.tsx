@@ -1,4 +1,4 @@
-import type { LinkedInRawRow } from '../shared/types'
+import type { Row } from '../shared/types'
 import { StatsCard } from '../shared/components/StatsCard'
 import { ErrorCard } from '../shared/components/ErrorCard'
 import { usePerformanceMetrics } from '../shared/hooks/usePerformanceMetrics'
@@ -6,18 +6,18 @@ import { formatPercentage } from '../shared/utils/formatters'
 import { ExpandableText } from '../shared/components/ExpandableText'
 import { UserGrowthChart } from './UserGrowthChart'
 
-type LinkedInRawTabProps = {
+type GoogleAdsTabProps = {
   start: Date
   end: Date
-  rows: LinkedInRawRow[]
-  prevRows?: LinkedInRawRow[]
+  rows: Row[]
+  prevRows?: Row[]
   loading: boolean
   error: string | null
   growthData?: any[]
   growthLoading?: boolean
 }
 
-export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData, growthLoading }: LinkedInRawTabProps) {
+export function GoogleAdsTab({ rows, prevRows = [], loading, error, growthData, growthLoading }: GoogleAdsTabProps) {
   const totals = usePerformanceMetrics(rows)
   const prevTotals = usePerformanceMetrics(prevRows)
 
@@ -36,7 +36,7 @@ export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData
     };
   };
 
-  const urlsTrend = getTrend(rows.length, prevRows.length);
+  const pagesTrend = getTrend(rows.length, prevRows.length);
   const redirectsTrend = getTrend(totals.redirects, prevTotals.redirects);
   const conversionsTrend = getTrend(totals.conversions, prevTotals.conversions);
   const conversionRate = totals.redirects > 0 ? (totals.conversions / totals.redirects) * 100 : 0;
@@ -46,51 +46,51 @@ export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData
   return (
     <>
       {error && <ErrorCard message={error} />}
-      
+
       <div className="page-content">
         <div className="raw-tab-notice">
-          <strong>Raw Data:</strong> Shows LinkedIn traffic mapped to Directus content URLs (no post title mapping required)
+          <strong>Google Ads:</strong> paid Google signups (utm_source=google, cpc / demand_gen), kept separate from organic Google search.
         </div>
-        
+
         <div className="cards">
-          <StatsCard 
-            title="Total URLs" 
-            value={rows.length} 
+          <StatsCard
+            title="Total Pages"
+            value={rows.length}
             loading={loading}
             prevValue={prevRows.length}
-            trend={urlsTrend.direction}
-            trendValue={urlsTrend.value}
+            trend={pagesTrend.direction}
+            trendValue={pagesTrend.value}
           />
-          <StatsCard 
-            title="Total Redirects" 
-            value={totals.redirects} 
+          <StatsCard
+            title="Total Redirects"
+            value={totals.redirects}
             loading={loading}
             prevValue={prevTotals.redirects}
             trend={redirectsTrend.direction}
             trendValue={redirectsTrend.value}
           />
-          <StatsCard 
-            title="Total Conversions" 
-            value={totals.conversions} 
+          <StatsCard
+            title="Total Conversions"
+            value={totals.conversions}
             loading={loading}
             prevValue={prevTotals.conversions}
             trend={conversionsTrend.direction}
             trendValue={conversionsTrend.value}
           />
-          <StatsCard 
-            title="Conversion Rate" 
-            value={totals.redirects > 0 ? formatPercentage(conversionRate) : '0%'} 
+          <StatsCard
+            title="Conversion Rate"
+            value={totals.redirects > 0 ? formatPercentage(conversionRate) : '0%'}
             loading={loading}
             prevValue={prevTotals.redirects > 0 ? formatPercentage(prevConversionRate) : '0%'}
             trend={conversionRateTrend.direction}
             trendValue={conversionRateTrend.value}
           />
         </div>
-        
+
         <UserGrowthChart
           data={growthData ?? []}
           loading={growthLoading}
-          title="LinkedIn Conversions (Last 30 Days)"
+          title="Google Ads Conversions (Last 30 Days)"
           cumulativeLabel="Total Conversions"
           dailyLabel="Daily Conversions"
         />
@@ -102,8 +102,7 @@ export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData
             <table>
               <thead>
                 <tr>
-                  <th>URL / Content</th>
-                  <th>Content ID</th>
+                  <th>Landing Page</th>
                   <th>Redirects</th>
                   <th>Conversions</th>
                   <th>Rate</th>
@@ -111,9 +110,8 @@ export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={`linkedin-raw-${r.post}`}>
+                  <tr key={`google-ads-${r.post}`}>
                     <td><ExpandableText text={r.post} maxLength={60} /></td>
-                    <td>{r.content_id || '-'}</td>
                     <td>{r.redirect_count}</td>
                     <td>{r.user_converted}</td>
                     <td>{r.redirect_count > 0 ? formatPercentage((r.user_converted / r.redirect_count) * 100) : '0%'}</td>
@@ -121,7 +119,6 @@ export function LinkedInRawTab({ rows, prevRows = [], loading, error, growthData
                 ))}
                 <tr className="totals-row">
                   <td><strong>Total</strong></td>
-                  <td></td>
                   <td><strong>{totals.redirects}</strong></td>
                   <td><strong>{totals.conversions}</strong></td>
                   <td><strong>{totals.redirects > 0 ? formatPercentage((totals.conversions / totals.redirects) * 100) : '0%'}</strong></td>

@@ -10,6 +10,7 @@ import { Sidebar } from './components/Sidebar'
 import { DashboardLayout } from './components/DashboardLayout'
 import { OverviewTab } from './components/OverviewTab'
 import { GoogleTab } from './components/GoogleTab'
+import { GoogleAdsTab } from './components/GoogleAdsTab'
 import { OtherTab } from './components/OtherTab'
 import { SearchQueriesTab } from './components/SearchQueriesTab'
 import { YTSearchRankingTab } from './components/YTSearchRankingTab'
@@ -29,6 +30,7 @@ const tabTitles: Record<TabType, string> = {
   'linkedin-raw': 'LinkedIn Raw Analytics',
   'youtube-raw': 'YouTube Raw Analytics',
   google: 'Google Analytics',
+  'google-ads': 'Google Ads',
   other: 'Other / Unattributed',
   'search-queries': 'Search Queries',
   'yt-search-ranking': 'YouTube Search Ranking',
@@ -52,10 +54,21 @@ function App() {
   const { data: userGrowthData } = useFetchData<any[]>('/user-growth', []) // New Endpoint
 
   const { data: googleData, loading: googleLoading, error: googleError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/google${query}`, [query])
+  const { data: googleAdsData, loading: googleAdsLoading, error: googleAdsError } = useFetchData<{rows: Row[], prevRows: Row[]}>(`/google-ads${query}`, [query])
+
+  // Per-channel 30-day growth (daily + cumulative conversions), fetched only for the active channel tab.
+  const sourceGrowthKey = activeTab === 'linkedin-raw' ? 'linkedin'
+    : activeTab === 'youtube-raw' ? 'youtube'
+    : activeTab === 'google' ? 'google'
+    : activeTab === 'google-ads' ? 'google_ads'
+    : ''
+  const { data: sourceGrowthData, loading: sourceGrowthLoading } = useFetchData<any[]>(sourceGrowthKey ? `/source-growth?source=${sourceGrowthKey}` : '', [sourceGrowthKey])
   const { data: otherData, loading: otherLoading, error: otherError } = useFetchData<{rows: OtherRow[], prevRows: OtherRow[]}>(`/other${query}`, [query])
 
   const googleRows = googleData?.rows || []
   const googlePrevRows = googleData?.prevRows || []
+  const googleAdsRows = googleAdsData?.rows || []
+  const googleAdsPrevRows = googleAdsData?.prevRows || []
   const otherRows = otherData?.rows || []
   const otherPrevRows = otherData?.prevRows || []
   const { data: searchQueryRows, loading: searchQueriesLoading, error: searchQueriesError } = useFetchData<QueryRow[]>(`/search-queries${query}`, [query])
@@ -126,6 +139,7 @@ function App() {
             linkedinConversions: totals.prevLinkedinConversions ?? 0,
             youtubeConversions: totals.prevYoutubeConversions ?? 0,
             googleConversions: totals.prevGoogleConversions ?? 0,
+            googleAdsConversions: totals.prevGoogleAdsConversions ?? 0,
             otherConversions: totals.prevOtherConversions ?? 0,
           } : null}
         />
@@ -139,6 +153,8 @@ function App() {
           prevRows={liRawPrevRows}
           loading={liRawLoading}
           error={liRawError}
+          growthData={sourceGrowthData ?? undefined}
+          growthLoading={sourceGrowthLoading}
         />
       )}
 
@@ -151,6 +167,8 @@ function App() {
           paidRows={ytRawPaidRows}
           loading={ytRawLoading}
           error={ytRawError}
+          growthData={sourceGrowthData ?? undefined}
+          growthLoading={sourceGrowthLoading}
         />
       )}
 
@@ -162,6 +180,21 @@ function App() {
           prevRows={googlePrevRows}
           loading={googleLoading}
           error={googleError}
+          growthData={sourceGrowthData ?? undefined}
+          growthLoading={sourceGrowthLoading}
+        />
+      )}
+
+      {activeTab === 'google-ads' && (
+        <GoogleAdsTab
+          start={start}
+          end={end}
+          rows={googleAdsRows}
+          prevRows={googleAdsPrevRows}
+          loading={googleAdsLoading}
+          error={googleAdsError}
+          growthData={sourceGrowthData ?? undefined}
+          growthLoading={sourceGrowthLoading}
         />
       )}
 

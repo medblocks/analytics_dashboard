@@ -4,6 +4,7 @@ import { GooglePerformanceTable } from '../shared/components/GooglePerformanceTa
 import { ErrorCard } from '../shared/components/ErrorCard'
 import { usePerformanceMetrics } from '../shared/hooks/usePerformanceMetrics'
 import { formatPercentage } from '../shared/utils/formatters'
+import { UserGrowthChart } from './UserGrowthChart'
 
 type GoogleTabProps = {
   start: Date
@@ -12,9 +13,11 @@ type GoogleTabProps = {
   prevRows?: Row[]
   loading: boolean
   error: string | null
+  growthData?: any[]
+  growthLoading?: boolean
 }
 
-export function GoogleTab({ rows, prevRows = [], loading, error }: GoogleTabProps) {
+export function GoogleTab({ rows, prevRows = [], loading, error, growthData, growthLoading }: GoogleTabProps) {
   const totals = usePerformanceMetrics(rows)
   const prevTotals = usePerformanceMetrics(prevRows)
 
@@ -80,6 +83,14 @@ export function GoogleTab({ rows, prevRows = [], loading, error }: GoogleTabProp
           />
         </div>
         
+        <UserGrowthChart
+          data={growthData ?? []}
+          loading={growthLoading}
+          title="Google Conversions (Last 30 Days)"
+          cumulativeLabel="Total Conversions"
+          dailyLabel="Daily Conversions"
+        />
+
         <GooglePerformanceTable rows={rows} totals={totals} loading={loading} />
       </div>
     </>
