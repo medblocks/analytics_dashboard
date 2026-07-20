@@ -135,6 +135,14 @@ const pool = new Pool({
 	password: process.env.DB_PASSWORD,
 	database: process.env.DB_NAME,
 	port: parseInt(process.env.DB_PORT),
+	// Resolve unqualified table names from public first, then the posthog schema.
+	// Warehouse tables (umami_*, directus_*, search_console_*) live in public;
+	// the PostHog batch export lands posthog_events / posthog_persons in the
+	// dedicated `posthog` schema. This keeps the two data sources cleanly
+	// separated without schema-qualifying every posthog reference in the queries.
+	// Robust either way: if the export ever targets public instead, public-first
+	// resolution still finds the tables.
+	options: '-c search_path=public,posthog',
 	// Connection pool configuration
 	max: 20, // Maximum number of clients in the pool
 	connectionTimeoutMillis: 30000, // Wait up to 30 seconds for a connection
@@ -350,7 +358,7 @@ signup_source AS (
   LEFT JOIN session_any_source sas ON sas.session_id = ce.session_id
   LEFT JOIN signup_first_touch ft ON ft.user_id = s.user_id
 ),
-attributed_signups AS (
+umami_attributed AS (
   SELECT
     user_id,
     landing_page,
@@ -362,6 +370,83 @@ attributed_signups AS (
     referrer_domain,
     COALESCE(${SOURCE_CASE_SQL}, 'other') AS source
   FROM signup_source
+),
+-- === PostHog era (signups on/after 2026-07-08) ===
+-- Umami stopped capturing on 2026-06-29 (the site's Astro/Workers migration
+-- broke the /api/send beacon), so its cascade yields nothing here. PostHog
+-- captures first-touch natively as $initial_* person properties, so we read the
+-- channel straight off the person. The signup COUNT stays anchored to
+-- directus_user; PostHog only supplies attribution. $initial_referring_domain
+-- is normalized to a bare host (strip scheme-less 'www.', drop PostHog's
+-- '$direct' sentinel) so it matches the Umami-era domain lists in SOURCE_CASE_SQL.
+ph_person AS (
+  SELECT DISTINCT ON (distinct_id)
+    distinct_id,
+    lower(properties->>'$initial_utm_source')  AS utm_source,
+    lower(properties->>'$initial_utm_medium')  AS utm_medium,
+    properties->>'$initial_utm_campaign'       AS utm_campaign,
+    NULLIF(
+      regexp_replace(lower(coalesce(properties->>'$initial_referring_domain','')), '^www\\.', ''),
+      '$direct'
+    ) AS referrer_domain
+  FROM posthog_persons
+  WHERE NOT is_deleted
+  ORDER BY distinct_id, person_version DESC
+),
+ph_first_pv AS (
+  -- The person's earliest $pageview path, used as the landing page for
+  -- PostHog-era conversions (~88% resolvable). Lets the channel tabs and
+  -- /api/other attribute these signups to a real landing page instead of
+  -- collapsing them under '(no entry page)'.
+  SELECT DISTINCT ON (distinct_id)
+    distinct_id,
+    properties->>'$pathname' AS url_path
+  FROM posthog_events
+  WHERE event = '$pageview' AND properties->>'$pathname' IS NOT NULL
+  ORDER BY distinct_id, timestamp ASC
+),
+posthog_source AS (
+  -- directus_user.id is the Clerk id, which is also the PostHog distinct_id
+  -- (set by identify()), so this join links the signup to its person. Unmatched
+  -- signups (no PostHog person) fall through to 'other'.
+  SELECT
+    s.user_id,
+    fp.url_path   AS landing_page,
+    NULL::varchar AS landing_query,
+    ph.utm_source,
+    ph.utm_medium,
+    ph.utm_campaign,
+    NULL::varchar AS utm_term,
+    ph.referrer_domain
+  FROM signups s
+  LEFT JOIN ph_person ph ON ph.distinct_id = s.user_id
+  LEFT JOIN ph_first_pv fp ON fp.distinct_id = s.user_id
+  WHERE s.date_created >= '2026-07-08'
+),
+posthog_attributed AS (
+  SELECT
+    user_id,
+    landing_page,
+    landing_query,
+    utm_source,
+    utm_medium,
+    utm_campaign,
+    utm_term,
+    referrer_domain,
+    COALESCE(${SOURCE_CASE_SQL}, 'other') AS source
+  FROM posthog_source
+),
+-- === Hybrid: Umami attribution before 2026-07-08 (the Umami era plus the
+-- 2026-06-29..07-07 data gap, which resolves to 'other' since neither source
+-- covers it), PostHog attribution on/after. A single cutoff means every signup
+-- is counted exactly once, so the total still equals directus_user. ===
+attributed_signups AS (
+  SELECT ua.*
+  FROM umami_attributed ua
+  JOIN signups s ON s.user_id = ua.user_id
+  WHERE s.date_created < '2026-07-08'
+  UNION ALL
+  SELECT * FROM posthog_attributed
 )`;
 
 // Per-session classification, scoped to sessions active in the range.
@@ -375,10 +460,13 @@ attributed_signups AS (
 // Composes after ATTRIBUTED_SIGNUPS_CTES via comma.
 const RANGE_CLASSIFIED_SESSIONS_CTES = `
 range_active_sessions AS (
+  -- Umami era only: Umami capture died 2026-06-29 (site migration broke the
+  -- beacon), so cap the window there. PostHog pageviews cover >= 2026-07-08 via
+  -- posthog_classified below, keeping redirect_count continuous across the gap.
   SELECT DISTINCT session_id
   FROM umami_website_event
   WHERE created_at >= $1::timestamptz
-    AND created_at <  $2::timestamptz
+    AND created_at <  LEAST($2::timestamptz, '2026-06-29'::timestamptz)
 ),
 session_all_time_first_view AS (
   SELECT DISTINCT ON (uwe.session_id)
@@ -434,7 +522,7 @@ session_range_resolved AS (
   FROM session_all_time_first_view fv
   LEFT JOIN session_range_any_source sas ON sas.session_id = fv.session_id
 ),
-classified_sessions AS (
+umami_classified AS (
   SELECT
     session_id,
     url_path,
@@ -445,6 +533,39 @@ classified_sessions AS (
     utm_term,
     ${SOURCE_CASE_SQL} AS source
   FROM session_range_resolved
+),
+-- === PostHog era pageview sessions (>= 2026-07-08), classified the same way ===
+-- The first $pageview of each PostHog session in range gives the landing page;
+-- the session's referrer/utm (referrer www-normalized to match SOURCE_CASE_SQL's
+-- Umami-era domain lists) gives the channel. Mirrors the Umami branch so
+-- redirect_count stays continuous across the cutover.
+posthog_pv_sessions AS (
+  SELECT DISTINCT ON (properties->>'$session_id')
+    properties->>'$session_id' AS session_id,
+    properties->>'$pathname'   AS url_path,
+    NULL::varchar              AS url_query,
+    lower(properties->>'utm_source')   AS utm_source,
+    lower(properties->>'utm_medium')   AS utm_medium,
+    properties->>'utm_campaign'        AS utm_campaign,
+    NULL::varchar              AS utm_term,
+    NULLIF(regexp_replace(lower(coalesce(properties->>'$referring_domain','')), '^www\\.', ''), '$direct') AS referrer_domain
+  FROM posthog_events
+  WHERE event = '$pageview'
+    AND properties->>'$session_id' IS NOT NULL
+    AND timestamp >= GREATEST($1::timestamptz, '2026-07-08'::timestamptz)
+    AND timestamp <  $2::timestamptz
+  ORDER BY properties->>'$session_id', timestamp ASC
+),
+posthog_classified AS (
+  SELECT
+    session_id, url_path, url_query, utm_source, utm_medium, utm_campaign, utm_term,
+    ${SOURCE_CASE_SQL} AS source
+  FROM posthog_pv_sessions
+),
+classified_sessions AS (
+  SELECT session_id::text, url_path, url_query, utm_source, utm_medium, utm_campaign, utm_term, source FROM umami_classified
+  UNION ALL
+  SELECT session_id::text, url_path, url_query, utm_source, utm_medium, utm_campaign, utm_term, source FROM posthog_classified
 )`;
 
 // The compact form used by /api/totals — only the attributed_signups CTE.
@@ -825,7 +946,10 @@ app.get("/api/other", async (req, res) => {
 
 		const subSourceCase = `
   CASE
-    WHEN asg.landing_page IS NULL THEN 'No entry pageview'
+    -- Source classification (referrer / utm) comes first: a signup's channel is
+    -- defined by where it came from, independent of whether we could resolve its
+    -- landing page. Only when there is NO source signal do we fall back to the
+    -- landing-page-based labels ('No entry pageview' / 'Direct').
     WHEN lower(asg.utm_source) = 'brevo'
       OR asg.referrer_domain ILIKE '%sendibm%'
       OR asg.referrer_domain ILIKE '%brevo%' THEN 'Brevo / Email'
@@ -835,6 +959,8 @@ app.get("/api/other", async (req, res) => {
     WHEN asg.referrer_domain IN ('chatgpt.com','perplexity.ai','claude.ai','gemini.google.com','notebooklm.google.com','copilot.microsoft.com')
       OR lower(asg.utm_source) IN ('chatgpt.com','chatgpt','perplexity','perplexity.ai','claude.ai','claude','gemini','copilot') THEN 'AI chat'
     WHEN asg.referrer_domain = 'medblocks.com' THEN 'Internal'
+    -- No source signal below this point.
+    WHEN asg.landing_page IS NULL THEN 'No entry pageview'
     WHEN coalesce(asg.referrer_domain,'') = '' AND coalesce(asg.utm_source,'') = '' THEN 'Direct'
     ELSE COALESCE(NULLIF(asg.referrer_domain,''), NULLIF(asg.utm_source,''), 'Other')
   END`;
@@ -983,98 +1109,76 @@ app.get("/api/search-queries", async (req, res) => {
 		try {
 			const { rows } = await client.query(
 				`WITH queries_with_paths AS (
-  SELECT
-    query,
-    regexp_replace(page, '^https?://[^/]+', '') AS url_path
+  -- DISTINCT collapses the per-(query,page,fetch_date) rows of search_console_fresh
+  -- to unique (query, url_path) pairs. Without it the same pair repeats across
+  -- every fetch_date (~31x here), and each duplicate re-runs the joins below to
+  -- umami_website_event / posthog_events. Downstream counts are all DISTINCT, so
+  -- this changes nothing but the row volume feeding the joins.
+  SELECT DISTINCT query, regexp_replace(page, '^https?://[^/]+', '') AS url_path
   FROM search_console_fresh
-  WHERE fetch_date >= $1::date
-    AND fetch_date <= $2::date
-    AND query = ANY($3)
+  WHERE fetch_date >= $1::date AND fetch_date <= $2::date AND query = ANY($3)
 ),
-base AS (
-  SELECT
-    qwp.query,
-    qwp.url_path,
-    uwe.session_id,
-    uwe.event_id AS uwe_id
+umami_base AS (
+  SELECT qwp.query, qwp.url_path, uwe.session_id, uwe.event_id AS uwe_id
   FROM queries_with_paths qwp
-  JOIN umami_website_event uwe
-    ON uwe.url_path = qwp.url_path
+  JOIN umami_website_event uwe ON uwe.url_path = qwp.url_path
   WHERE uwe.created_at > $1::timestamptz
-    AND uwe.created_at < $2::timestamptz
+    AND uwe.created_at < LEAST($2::timestamptz, '2026-06-29'::timestamptz)
     AND uwe.referrer_domain ILIKE '%google%'
 ),
-query_sessions AS (
-  SELECT DISTINCT query, session_id
-  FROM base
+posthog_base AS (
+  SELECT qwp.query, qwp.url_path, e.properties->>'$session_id' AS session_id,
+         e.uuid::text AS uwe_id, e.distinct_id
+  FROM queries_with_paths qwp
+  JOIN posthog_events e ON e.properties->>'$pathname' = qwp.url_path
+  WHERE e.event = '$pageview'
+    AND e.properties->>'$referring_domain' ILIKE '%google%'
+    AND e.timestamp >= GREATEST($1::timestamptz, '2026-07-08'::timestamptz)
+    AND e.timestamp <  $2::timestamptz
 ),
-unique_sessions AS (
-  SELECT DISTINCT session_id FROM base
-),
-first_conversion_events AS (
-  SELECT DISTINCT ON (us.session_id)
-    us.session_id,
-    u2.event_id AS website_event_id
-  FROM unique_sessions us
-  JOIN umami_website_event u2 
+u_unique AS (SELECT DISTINCT session_id FROM umami_base),
+u_fce AS (
+  SELECT DISTINCT ON (us.session_id) us.session_id, u2.event_id AS weid
+  FROM u_unique us JOIN umami_website_event u2
     ON u2.session_id = us.session_id AND u2.event_type = 2
   ORDER BY us.session_id, u2.created_at ASC
 ),
-conversion_user_data AS (
-  SELECT DISTINCT ON (fce.session_id)
-    fce.session_id,
-    ued.string_value AS user_id,
-    ued.created_at AS event_data_created_at
-  FROM first_conversion_events fce
-  JOIN umami_event_data ued 
-    ON ued.website_event_id = fce.website_event_id AND ued.data_key = 'user_id'
-  ORDER BY fce.session_id, ued.created_at ASC
+u_cud AS (
+  SELECT DISTINCT ON (fx.session_id) fx.session_id, ued.string_value AS uid, ued.created_at AS ts
+  FROM u_fce fx JOIN umami_event_data ued
+    ON ued.website_event_id = fx.weid AND ued.data_key = 'user_id'
+  ORDER BY fx.session_id, ued.created_at ASC
 ),
-converted_sessions AS (
-  SELECT cud.session_id
-  FROM conversion_user_data cud
-  JOIN directus_user du 
-    ON du.id = cud.user_id
-    AND du.date_created BETWEEN (cud.event_data_created_at - INTERVAL '2 minutes')
-                            AND (cud.event_data_created_at + INTERVAL '2 minutes')
+u_conv AS (
+  SELECT cud.session_id::text AS sid FROM u_cud cud
+  JOIN directus_user du ON du.id = cud.uid
+    AND du.date_created BETWEEN cud.ts - INTERVAL '2 minutes' AND cud.ts + INTERVAL '2 minutes'
 ),
-session_conversions AS (
-  SELECT qs.query, qs.session_id,
-    CASE WHEN cs.session_id IS NOT NULL THEN 1 ELSE 0 END AS converted
-  FROM query_sessions qs
-  LEFT JOIN converted_sessions cs ON cs.session_id = qs.session_id
+p_conv AS (
+  SELECT DISTINCT pb.session_id AS sid FROM posthog_base pb
+  JOIN directus_user du ON du.id = pb.distinct_id
 ),
-redirects_by_query AS (
-  SELECT
-    query,
-    COUNT(*) AS redirect_count
-  FROM base
-  GROUP BY query
+converted AS (SELECT sid FROM u_conv UNION SELECT sid FROM p_conv),
+allbase AS (
+  SELECT query, url_path, session_id::text AS sid, uwe_id::text AS uid FROM umami_base
+  UNION ALL
+  SELECT query, url_path, session_id, uwe_id FROM posthog_base
 ),
+redirects_by_query AS (SELECT query, count(DISTINCT uid) AS redirect_count FROM allbase GROUP BY query),
+query_sessions AS (SELECT DISTINCT query, sid FROM allbase),
 conversions_by_query AS (
-  SELECT
-    query,
-    SUM(converted) AS user_converted
-  FROM session_conversions
-  GROUP BY query
+  SELECT qz.query, count(*) FILTER (WHERE c.sid IS NOT NULL) AS user_converted
+  FROM query_sessions qz LEFT JOIN converted c ON c.sid = qz.sid GROUP BY qz.query
 ),
-paths_by_query AS (
-  SELECT
-    query,
-    ARRAY_AGG(DISTINCT url_path ORDER BY url_path) AS url_paths
-  FROM base
-  GROUP BY query
-)
+paths_by_query AS (SELECT query, array_agg(DISTINCT url_path ORDER BY url_path) AS url_paths FROM allbase GROUP BY query)
 SELECT
   r.query,
   r.redirect_count::int,
   COALESCE(c.user_converted, 0)::int AS user_converted,
   COALESCE(p.url_paths, ARRAY[]::text[]) AS url_paths
 FROM redirects_by_query r
-LEFT JOIN conversions_by_query c
-  ON c.query = r.query
-LEFT JOIN paths_by_query p
-  ON p.query = r.query
+LEFT JOIN conversions_by_query c ON c.query = r.query
+LEFT JOIN paths_by_query p ON p.query = r.query
 ORDER BY COALESCE(c.user_converted, 0) DESC, r.redirect_count DESC;`,
 				[start, end, keywords]
 			);
@@ -1656,39 +1760,51 @@ app.get("/api/contact-us", async (req, res) => {
 			] = await Promise.all([
 				// Current period counts - query event_name column directly from umami_website_event
 				client.query(
-					`SELECT 
-						COALESCE(SUM(CASE WHEN event_name = 'contact-page-visit' THEN 1 ELSE 0 END), 0)::int AS page_visits,
-						COALESCE(SUM(CASE WHEN event_name = 'contact-page-form-submit' THEN 1 ELSE 0 END), 0)::int AS form_submissions
-					FROM umami_website_event
-					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
-						AND created_at > $1::timestamptz
-						AND created_at < $2::timestamptz`,
+					`SELECT
+						(SELECT count(*)::int FROM umami_website_event
+						   WHERE event_name = 'contact-page-visit'
+						     AND created_at >= $1::timestamptz
+						     AND created_at <  LEAST($2::timestamptz, '2026-06-29'::timestamptz))
+						+ (SELECT count(*)::int FROM posthog_events
+						   WHERE event = 'contact-page-visit'
+						     AND timestamp >= GREATEST($1::timestamptz, '2026-07-08'::timestamptz)
+						     AND timestamp <  $2::timestamptz) AS page_visits,
+						(SELECT count(*)::int FROM directus_contact
+						   WHERE date_created >= $1::timestamptz AND date_created < $2::timestamptz) AS form_submissions`,
 					[start, end]
 				),
 				// Previous period counts for trend comparison
 				client.query(
-					`SELECT 
-						COALESCE(SUM(CASE WHEN event_name = 'contact-page-visit' THEN 1 ELSE 0 END), 0)::int AS page_visits,
-						COALESCE(SUM(CASE WHEN event_name = 'contact-page-form-submit' THEN 1 ELSE 0 END), 0)::int AS form_submissions
-					FROM umami_website_event
-					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
-						AND created_at > $1::timestamptz
-						AND created_at < $2::timestamptz`,
+					`SELECT
+						(SELECT count(*)::int FROM umami_website_event
+						   WHERE event_name = 'contact-page-visit'
+						     AND created_at >= $1::timestamptz
+						     AND created_at <  LEAST($2::timestamptz, '2026-06-29'::timestamptz))
+						+ (SELECT count(*)::int FROM posthog_events
+						   WHERE event = 'contact-page-visit'
+						     AND timestamp >= GREATEST($1::timestamptz, '2026-07-08'::timestamptz)
+						     AND timestamp <  $2::timestamptz) AS page_visits,
+						(SELECT count(*)::int FROM directus_contact
+						   WHERE date_created >= $1::timestamptz AND date_created < $2::timestamptz) AS form_submissions`,
 					[prevStart, prevEnd]
 				),
 				// Recent events for the table
 				client.query(
-					`SELECT 
-						event_name,
-						session_id,
-						created_at,
-						url_path
-					FROM umami_website_event
-					WHERE event_name IN ('contact-page-visit', 'contact-page-form-submit')
-						AND created_at > $1::timestamptz
-						AND created_at < $2::timestamptz
-					ORDER BY created_at DESC
-					LIMIT 1000`,
+					`SELECT event_name, session_id, created_at, url_path FROM (
+						SELECT 'contact-page-visit' AS event_name, session_id::text AS session_id, created_at, url_path
+						  FROM umami_website_event
+						  WHERE event_name = 'contact-page-visit'
+						    AND created_at >= $1::timestamptz AND created_at < LEAST($2::timestamptz, '2026-06-29'::timestamptz)
+						UNION ALL
+						SELECT 'contact-page-visit', properties->>'$session_id', timestamp, properties->>'$pathname'
+						  FROM posthog_events
+						  WHERE event = 'contact-page-visit'
+						    AND timestamp >= GREATEST($1::timestamptz, '2026-07-08'::timestamptz) AND timestamp < $2::timestamptz
+						UNION ALL
+						SELECT 'contact-form-submit', NULL::text, date_created, NULL::varchar
+						  FROM directus_contact
+						  WHERE date_created >= $1::timestamptz AND date_created < $2::timestamptz
+					) x ORDER BY created_at DESC LIMIT 1000`,
 					[start, end]
 				)
 			]);
